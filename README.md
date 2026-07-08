@@ -3,97 +3,97 @@
 
 # Dikta
 
-**הכתבה קולית לוקלית למק — עברית ואנגלית, בלי ענן, בלי מנוי**
+**Local voice dictation for macOS — Hebrew & English, no cloud, no subscription**
 
-Local push-to-talk dictation for macOS via whisper.cpp. Hold a key, speak, release — the text appears.
+Push-to-talk dictation powered by whisper.cpp. Hold a key, speak, release — the text appears.
 </div>
 
 ---
 
-## מה זה עושה
+## What it does
 
-מחזיקים קיצור מקלדת (ברירת מחדל: **Right Option**), מדברים, משחררים:
+Hold a keyboard shortcut (default: **Right Option**), speak, release:
 
-- אם הסמן בשדה טקסט — הטקסט המתומלל **מוקלד ישר פנימה** (והקליפבורד שלך משוחזר אחר כך)
-- אם לא — הטקסט **מועתק ללוח** ומופיעה התראה
+- If the cursor is in a text field — the transcript is **typed right in** (and your clipboard is restored afterwards)
+- If not — the transcript is **copied to the clipboard** and a notification appears
 
-הכול רץ על המחשב. שום אודיו או טקסט לא עוזב אותו.
+Everything runs on your machine. No audio or text ever leaves it.
 
-## פיצ'רים
+## Features
 
-- 🎙️ **Press-and-hold** — בלי לחיצות, בלי חלונות; מדברים וזהו
-- 🌍 **זיהוי שפה אוטומטי** — עברית מנותבת למודל של [ivrit.ai](https://huggingface.co/ivrit-ai) (אם הורד), שאר השפות ל-Whisper large-v3-turbo
-- ⌨️ **קיצור מותאם אישית** — מקש בודד או צירוף (⌃⌥Space וכו'), נלכד מהתפריט
-- 🧠 **ניהול זיכרון** — המודלים נפרקים מהזיכרון אחרי 5 דקות ללא שימוש ונטענים מחדש תוך פחות משנייה
-- ⚡ **מהיר** — ‏Metal על Apple Silicon; ~0.25 שניות ל-4 שניות דיבור על M5 Pro
+- 🎙️ **Press-and-hold** — no clicks, no windows; just talk
+- 🌍 **Automatic language routing** — Hebrew is routed to the [ivrit.ai](https://huggingface.co/ivrit-ai) fine-tune (if downloaded), everything else to Whisper large-v3-turbo
+- ⌨️ **Custom shortcut** — a single key or a combo (⌃⌥Space etc.), captured from the menu
+- 🧠 **Memory-aware** — models are unloaded after 5 idle minutes and reload in under a second
+- ⚡ **Fast** — Metal on Apple Silicon; ~0.25s for 4s of speech on an M5 Pro
 
-## דרישות
+## Requirements
 
-- macOS 14+ על Apple Silicon
-- Xcode Command Line Tools בלבד (`xcode-select --install`) — **לא צריך Xcode**
-- ~600MB דיסק למודל הבסיסי (+1.6GB למודל העברי האופציונלי)
+- macOS 14+ on Apple Silicon
+- Xcode Command Line Tools only (`xcode-select --install`) — **no Xcode needed**
+- ~600MB of disk for the base model (+1.6GB for the optional Hebrew model)
 
-## התקנה
+## Installation
 
 ```bash
 git clone https://github.com/yahelhai/Dikta.git
 cd Dikta
-make fetch     # מוריד את whisper.cpp XCFramework (חד-פעמי)
-make models    # מוריד את מודל התמלול הבסיסי (~574MB)
-make cert      # חד-פעמי: תעודת חתימה כדי שההרשאות ישרדו עדכונים
-make install   # בונה ומתקין ל-/Applications
+make fetch     # downloads the whisper.cpp XCFramework (one-time)
+make models    # downloads the base transcription model (~574MB)
+make cert      # one-time: signing certificate so permissions survive updates
+make install   # builds and installs to /Applications
 open /Applications/Dikta.app
 ```
 
-### הרשאות (חד-פעמי)
+### Permissions (one-time)
 
-Dikta צריכה שלוש הרשאות — התפריט שלה מציג ✓/✗ ופותח את המסך הנכון בלחיצה:
+Dikta needs three permissions — its menu shows ✓/✗ for each and opens the right settings pane on click:
 
-| הרשאה | למה |
+| Permission | Why |
 |---|---|
-| מיקרופון | הקלטת הדיבור |
-| Accessibility | הזרקת הטקסט וזיהוי שדה הטקסט הממוקד |
-| Input Monitoring | האזנה לקיצור הגלובלי (CGEventTap) |
+| Microphone | Recording your speech |
+| Accessibility | Injecting text and detecting the focused text field |
+| Input Monitoring | Listening for the global shortcut (CGEventTap) |
 
-אחרי אישור Input Monitoring יש לצאת ולהפעיל מחדש את Dikta.
+After granting Input Monitoring, quit and relaunch Dikta.
 
-## שימוש
+## Usage
 
-1. מחזיקים **Right Option**, מדברים, משחררים
-2. **שינוי קיצור:** תפריט → "קיצור: … — שנה…" → מקישים את הצירוף הרצוי
-3. **עברית מדויקת יותר:** תפריט → "הורד מודל עברית משופר (ivrit.ai)…" — אחרי ההורדה, במצב Auto כל הכתבה בעברית תנותב אליו אוטומטית
-4. **מצבי שפה:** Auto (זיהוי אוטומטי) / English / עברית
+1. Hold **Right Option**, speak, release
+2. **Change the shortcut:** menu → "Shortcut: … — change…" → press the combo you want
+3. **Better Hebrew:** menu → "Download improved Hebrew model (ivrit.ai)…" — once downloaded, Auto mode routes every Hebrew dictation to it automatically
+4. **Language modes:** Auto (detection) / English / Hebrew
 
-## פיתוח
+## Development
 
 ```bash
-swift build                                    # בנייה
-./.build/debug/Dikta sysinfo                   # בדיקת whisper + Metal
+swift build                                    # build
+./.build/debug/Dikta sysinfo                   # verify whisper + Metal
 ./.build/debug/Dikta transcribe file.wav --language he
-./.build/debug/Dikta detect file.wav           # זיהוי שפה בלבד
-make bundle && make install                    # אריזה + התקנה
+./.build/debug/Dikta detect file.wav           # language detection only
+make bundle && make install                    # package + install
 ```
 
-יצירת אודיו לבדיקה:
+Generating test audio:
 
 ```bash
 say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 ```
 
-### מבנה
+### Structure
 
-| קובץ | תפקיד |
+| File | Role |
 |---|---|
-| `HotkeyManager.swift` | CGEventTap — לכידת הקיצור הגלובלי ובליעתו |
-| `AudioRecorder.swift` | AVAudioEngine → ‏16kHz mono Float32 |
-| `Transcriber.swift` | whisper.cpp (actor); cache מודלים + פריקה אוטומטית |
-| `FocusInspector.swift` | AX API — האם המוקד בשדה טקסט |
-| `OutputRouter.swift` | הזרקה (pasteboard + ⌘V) או העתקה ללוח |
-| `ModelManager.swift` | רישום, הורדה ואחסון מודלים |
-| `scripts/bundle.sh` | הרכבת `.app` וחתימה — בלי Xcode |
+| `HotkeyManager.swift` | CGEventTap — captures and swallows the global shortcut |
+| `AudioRecorder.swift` | AVAudioEngine → 16kHz mono Float32 |
+| `Transcriber.swift` | whisper.cpp (actor); model cache + idle unloading |
+| `FocusInspector.swift` | AX API — is focus in a text field |
+| `OutputRouter.swift` | Injection (pasteboard + ⌘V) or copy to clipboard |
+| `ModelManager.swift` | Model registry, download and storage |
+| `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
-## קרדיטים
+## Credits
 
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — מנוע התמלול
-- [OpenAI Whisper](https://github.com/openai/whisper) — המודלים
-- [ivrit.ai](https://www.ivrit.ai) — הפיין-טיון העברי
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — the transcription engine
+- [OpenAI Whisper](https://github.com/openai/whisper) — the models
+- [ivrit.ai](https://www.ivrit.ai) — the Hebrew fine-tune
