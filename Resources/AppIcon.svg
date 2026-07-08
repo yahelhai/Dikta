@@ -1,0 +1,58 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A0E63"/>
+      <stop offset="0.55" stop-color="#160840"/>
+      <stop offset="1" stop-color="#0A0322"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#7C3AED" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#7C3AED" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mic" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="0.5" stop-color="#818CF8"/>
+      <stop offset="1" stop-color="#C084FC"/>
+    </linearGradient>
+    <linearGradient id="barL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#818CF8"/>
+    </linearGradient>
+    <linearGradient id="barR" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#C084FC"/>
+      <stop offset="1" stop-color="#F472B6"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- squircle background -->
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#glow)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#sheen)"/>
+
+  <!-- waveform bars: left (cyan) — rects, not lines: gradients need a nonzero bbox -->
+  <rect x="236" y="420" width="34" height="114" rx="17" fill="url(#barL)" opacity="0.55"/>
+  <rect x="305" y="360" width="34" height="200" rx="17" fill="url(#barL)" opacity="0.8"/>
+
+  <!-- waveform bars: right (pink) -->
+  <rect x="685" y="360" width="34" height="200" rx="17" fill="url(#barR)" opacity="0.8"/>
+  <rect x="754" y="420" width="34" height="114" rx="17" fill="url(#barR)" opacity="0.55"/>
+
+  <!-- microphone capsule -->
+  <rect x="437" y="268" width="150" height="264" rx="75" fill="url(#mic)"/>
+  <!-- capsule inner highlight -->
+  <rect x="459" y="290" width="42" height="150" rx="21" fill="#FFFFFF" opacity="0.35"/>
+
+  <!-- mic cradle arc -->
+  <path d="M 392 460 v 32 a 120 120 0 0 0 240 0 v -32"
+        fill="none" stroke="#EDE9FE" stroke-width="34" stroke-linecap="round"/>
+  <!-- stem -->
+  <line x1="512" y1="614" x2="512" y2="676" stroke="#EDE9FE" stroke-width="34" stroke-linecap="round"/>
+  <!-- base -->
+  <line x1="432" y1="700" x2="592" y2="700" stroke="#EDE9FE" stroke-width="34" stroke-linecap="round"/>
+</svg>
