@@ -92,6 +92,10 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `ModelManager.swift` | Model registry, download and storage |
 | `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
+## License
+
+[MIT](LICENSE)
+
 ## Credits
 
 - [whisper.cpp](https://github.com/ggml-org/whisper.cpp) — the transcription engine
