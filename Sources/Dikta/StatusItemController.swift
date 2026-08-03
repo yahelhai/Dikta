@@ -108,6 +108,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         shortcutItem.isEnabled = !isCapturingShortcut
         menu.addItem(shortcutItem)
 
+        // Trailing space
+        let spaceItem = NSMenuItem(title: "רווח אוטומטי בסוף הטקסט", action: #selector(toggleTrailingSpace), keyEquivalent: "")
+        spaceItem.target = self
+        spaceItem.state = settings.appendTrailingSpace ? .on : .off
+        menu.addItem(spaceItem)
+
         // Launch at login
         let loginItem = NSMenuItem(title: "פתח בהפעלת המחשב", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         loginItem.target = self
@@ -158,6 +164,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func downloadIvritSelected() {
         onDownloadIvrit?()
+    }
+
+    @objc private func toggleTrailingSpace() {
+        Settings.shared.appendTrailingSpace.toggle()
+        rebuildMenu()
     }
 
     @objc private func toggleLaunchAtLogin() {

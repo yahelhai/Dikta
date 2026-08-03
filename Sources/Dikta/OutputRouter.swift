@@ -13,6 +13,7 @@ final class OutputRouter {
 
     func deliver(_ text: String) async -> Delivery {
         guard !text.isEmpty else { return .copiedToClipboard }
+        let text = Settings.shared.appendTrailingSpace ? text + " " : text
 
         // Secure input (password fields) silently drops synthetic events.
         let secureInput = IsSecureEventInputEnabled()

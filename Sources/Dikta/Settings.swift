@@ -33,6 +33,7 @@ final class Settings {
         static let languageMode = "dikta.languageMode"
         static let shortcut = "dikta.shortcut"
         static let launchAtLogin = "dikta.launchAtLogin"
+        static let appendTrailingSpace = "dikta.appendTrailingSpace"
     }
 
     var languageMode: LanguageMode {
@@ -58,5 +59,14 @@ final class Settings {
     var launchAtLogin: Bool {
         get { defaults.bool(forKey: Key.launchAtLogin) }
         set { defaults.set(newValue, forKey: Key.launchAtLogin) }
+    }
+
+    /// Append a trailing space to every transcript so consecutive dictations
+    /// don't run together. Default: on.
+    var appendTrailingSpace: Bool {
+        get { defaults.object(forKey: Key.appendTrailingSpace) == nil
+            ? true
+            : defaults.bool(forKey: Key.appendTrailingSpace) }
+        set { defaults.set(newValue, forKey: Key.appendTrailingSpace) }
     }
 }
