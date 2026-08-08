@@ -102,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let (modelPath, language) = try await self.route(samples: samples, mode: mode)
+                let (modelPath, language) = try await LanguageRouter.route(
+                    samples: samples, mode: mode, transcriber: self.transcriber)
                 let text = try await self.transcriber.transcribe(
                     samples: samples, language: language, modelPath: modelPath)
                 if !text.isEmpty {
@@ -123,29 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdog?.cancel()
         state = .idle
         statusItemController.setIcon(.idle)
-    }
-
-    /// Pick model + language for this dictation. In Auto mode with the ivrit
-    /// model available, detect the language first (fast encoder pass on the
-    /// stock model) and route Hebrew to the ivrit fine-tune — it is far more
-    /// accurate for Hebrew but must run with an explicit "he" and can't handle
-    /// other languages.
-    private func route(samples: [Float], mode: LanguageMode) async throws -> (modelPath: String, language: String?) {
-        let stockPath = ModelManager.shared.localURL(for: ModelManager.stockTurboQ5).path
-        let ivritPath = ModelManager.shared.localURL(for: ModelManager.ivritTurbo).path
-        let ivritAvailable = ModelManager.shared.isDownloaded(ModelManager.ivritTurbo)
-
-        switch mode {
-        case .english:
-            return (stockPath, "en")
-        case .hebrew:
-            return (ivritAvailable ? ivritPath : stockPath, "he")
-        case .auto:
-            guard ivritAvailable else { return (stockPath, nil) }
-            let detected = try await transcriber.detectLanguage(samples: samples, modelPath: stockPath)
-            NSLog("Dikta: detected language '%@'", detected)
-            return detected == "he" ? (ivritPath, "he") : (stockPath, detected)
-        }
     }
 
     // MARK: - Shortcut capture
