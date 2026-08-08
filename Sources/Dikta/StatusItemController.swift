@@ -123,14 +123,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(loginItem)
         menu.addItem(.separator())
 
-        // Last transcript (debug aid)
-        if !lastTranscript.isEmpty {
-            let item = NSMenuItem(title: "‏\(String(lastTranscript.prefix(60)))", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-            menu.addItem(.separator())
-        }
-
         let quit = NSMenuItem(title: "צא מ-Dikta", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
