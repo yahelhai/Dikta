@@ -26,14 +26,21 @@ func runDetectCLI(_ args: [String]) -> Int32 {
     return exitCode
 }
 
-// dikta video <file> [-o <destDir>] [--language he|en|auto] [--summarize]
+private let videoUsage =
+    "usage: dikta video <video-file> [-o <dest-dir>] [--language he|en|auto] "
+    + "[--summarize] [--engine cli|api]\n"
+
+// dikta video <file> [-o <destDir>] [--language he|en|auto] [--summarize] [--engine cli|api]
 // Turns a video into <destDir>/<basename>/index.md + frames/, and with
-// --summarize also <destDir>/<basename>/summary.md via Claude.
+// --summarize also <destDir>/<basename>/summary.md via Claude — either through
+// the local Claude Code CLI (default, billed to the Claude subscription) or the
+// Messages API with the Keychain key (--engine api).
 func runVideoCLI(_ args: [String]) -> Int32 {
     var videoPath: String?
     var destPath: String?
     var mode: LanguageMode = .auto
     var summarize = false
+    var engine: SummaryEngine = .claudeCLI
 
     var i = 0
     while i < args.count {
@@ -44,6 +51,16 @@ func runVideoCLI(_ args: [String]) -> Int32 {
             i += 1
             guard i < args.count else { break }
             destPath = args[i]
+        case "--engine":
+            i += 1
+            guard i < args.count else { break }
+            switch args[i] {
+            case "cli", "claude", "claude-cli": engine = .claudeCLI
+            case "api", "apikey", "api-key": engine = .apiKey
+            default:
+                FileHandle.standardError.write("unknown engine: \(args[i])\n".data(using: .utf8)!)
+                return 2
+            }
         case "--language":
             i += 1
             guard i < args.count else { break }
@@ -62,8 +79,7 @@ func runVideoCLI(_ args: [String]) -> Int32 {
     }
 
     guard let videoPath else {
-        FileHandle.standardError.write(
-            "usage: dikta video <video-file> [-o <dest-dir>] [--language he|en|auto] [--summarize]\n".data(using: .utf8)!)
+        FileHandle.standardError.write(videoUsage.data(using: .utf8)!)
         return 2
     }
     let videoURL = URL(fileURLWithPath: videoPath).standardizedFileURL
@@ -81,23 +97,34 @@ func runVideoCLI(_ args: [String]) -> Int32 {
         return 3
     }
 
-    // The key lives in the Keychain; without one we still produce index.md and
-    // report the missing summary through the exit code.
-    let apiKey = summarize ? KeychainStore.apiKey() : nil
-    if summarize && apiKey == nil {
-        FileHandle.standardError.write("""
-            error: no Anthropic API key found in the Keychain — summary skipped.
-            שגיאה: לא נמצא מפתח Anthropic API — הסיכום דולג. הגדר מפתח מתפריט Dikta \
-            ("הגדר Anthropic API Key…"). ה-index.md נוצר כרגיל.
+    // How summary.md gets written (nil = don't summarize). The CLI engine needs
+    // no key; the API engine reads one from the Keychain, and without it we
+    // still produce index.md and report the missing summary via the exit code.
+    var summaryRequest: VideoFileProcessor.SummaryRequest?
+    if summarize {
+        switch engine {
+        case .claudeCLI:
+            // A missing `claude` binary surfaces as a summaryError (exit 4).
+            summaryRequest = .claudeCLI
+        case .apiKey:
+            if let apiKey = KeychainStore.apiKey() {
+                summaryRequest = .api(key: apiKey)
+            } else {
+                FileHandle.standardError.write("""
+                    error: no Anthropic API key found in the Keychain — summary skipped.
+                    שגיאה: לא נמצא מפתח Anthropic API — הסיכום דולג. הגדר מפתח מתפריט Dikta \
+                    ("הגדר Anthropic API Key…"). ה-index.md נוצר כרגיל.
 
-            """.data(using: .utf8)!)
+                    """.data(using: .utf8)!)
+            }
+        }
     }
 
     let semaphore = DispatchSemaphore(value: 0)
     nonisolated(unsafe) var exitCode: Int32 = 0
     let selectedMode = mode
     let wantsSummary = summarize
-    let key = apiKey
+    let request = summaryRequest
 
     Task {
         defer { semaphore.signal() }
@@ -108,7 +135,7 @@ func runVideoCLI(_ args: [String]) -> Int32 {
                 destinationDirectory: destination,
                 mode: selectedMode,
                 transcriber: Transcriber(),
-                summarizeWith: key
+                summary: request
             ) { phase, fraction in
                 reporter.report(phase: phase, fraction: fraction)
             }

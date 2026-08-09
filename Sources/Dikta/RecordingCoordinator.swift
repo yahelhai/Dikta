@@ -124,23 +124,38 @@ final class RecordingCoordinator {
     /// Returns the document to open: `summary.md` on success, `index.md`
     /// whenever the stage is skipped or fails.
     private func summarizeIfEnabled(output: Output, sessionDirectory: URL) async -> URL {
-        guard let apiKey = KeychainStore.apiKey(), Settings.shared.autoSummarize else {
-            return output.index
-        }
+        guard Settings.shared.autoSummarize else { return output.index }
+        let engine = Settings.shared.summaryEngine
+
         state = .processing(phase: "מסכם עם Claude…")
+        let progress: @Sendable (String) -> Void = { phase in
+            Task { @MainActor [weak self] in
+                self?.state = .processing(phase: phase)
+            }
+        }
+
         do {
-            return try await ClaudeSummarizer.summarize(
-                frames: output.frames, segments: output.segments,
-                sessionDirectory: sessionDirectory, apiKey: apiKey
-            ) { phase in
-                Task { @MainActor [weak self] in
-                    self?.state = .processing(phase: phase)
+            switch engine {
+            case .claudeCLI:
+                return try await ClaudeCLISummarizer.summarize(
+                    frames: output.frames, segments: output.segments,
+                    sessionDirectory: sessionDirectory, progress: progress)
+            case .apiKey:
+                guard let apiKey = KeychainStore.apiKey() else {
+                    NSLog("Dikta: summary skipped — API engine selected but no key configured")
+                    return output.index
                 }
+                return try await ClaudeSummarizer.summarize(
+                    frames: output.frames, segments: output.segments,
+                    sessionDirectory: sessionDirectory, apiKey: apiKey,
+                    progress: progress)
             }
         } catch {
             NSLog("Dikta: Claude summary failed: %@", "\(error)")
+            // Surface the actual reason (e.g. "credit balance is too low") —
+            // a generic message hides fixable problems.
             await notify(title: "הסיכום עם Claude נכשל",
-                         body: "ה-Markdown המקומי נשמר כרגיל.")
+                         body: String("\(error)".prefix(140)) + "\nה-Markdown המקומי נשמר כרגיל.")
             return output.index
         }
     }

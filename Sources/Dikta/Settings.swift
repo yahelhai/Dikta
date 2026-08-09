@@ -1,5 +1,20 @@
 import Foundation
 
+/// Which backend writes `summary.md`.
+enum SummaryEngine: String, CaseIterable, Sendable {
+    /// Claude Code CLI (`claude -p`) — uses the user's Claude subscription.
+    case claudeCLI
+    /// Anthropic Messages API — uses API credits and the Keychain key.
+    case apiKey
+
+    var displayName: String {
+        switch self {
+        case .claudeCLI: return "Claude CLI (מנוי — מומלץ)"
+        case .apiKey: return "API key (קרדיט API)"
+        }
+    }
+}
+
 enum LanguageMode: String, CaseIterable {
     case auto
     case english
@@ -36,6 +51,7 @@ final class Settings {
         static let appendTrailingSpace = "dikta.appendTrailingSpace"
         static let recordingsFolder = "dikta.recordingsFolder"
         static let autoSummarize = "dikta.autoSummarize"
+        static let summaryEngine = "dikta.summaryEngine"
     }
 
     var languageMode: LanguageMode {
@@ -73,10 +89,17 @@ final class Settings {
     }
 
     /// Run the (optional) Claude summary stage after a screen recording.
-    /// Default: off — it only takes effect when an API key is configured.
+    /// Default: off.
     var autoSummarize: Bool {
         get { defaults.bool(forKey: Key.autoSummarize) }
         set { defaults.set(newValue, forKey: Key.autoSummarize) }
+    }
+
+    /// How summaries are produced: the local Claude Code CLI (billed to the
+    /// user's Claude subscription) or the Messages API (billed to API credits).
+    var summaryEngine: SummaryEngine {
+        get { SummaryEngine(rawValue: defaults.string(forKey: Key.summaryEngine) ?? "") ?? .claudeCLI }
+        set { defaults.set(newValue.rawValue, forKey: Key.summaryEngine) }
     }
 
     /// Where screen recordings are written. Stored as a path string; the folder

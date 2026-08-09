@@ -57,15 +57,24 @@ enum VideoFileProcessor {
     /// Plenty of detail for hashing, cheap to decode.
     private static let hashingMaxSize = CGSize(width: 960, height: 960)
 
+    /// How (and whether) to produce `summary.md` after `index.md`.
+    enum SummaryRequest: Sendable {
+        /// Claude Code CLI — billed to the user's Claude subscription.
+        case claudeCLI
+        /// Messages API with this key — billed to API credits.
+        case api(key: String)
+    }
+
     /// Process `videoURL` into `<destinationDirectory>/<video-basename>/index.md`.
-    /// When `apiKey` is non-nil, also asks Claude for a `summary.md`; a failure
-    /// there is thrown *after* index.md is safely on disk.
+    /// When `summary` is non-nil, also asks Claude for a `summary.md`; a failure
+    /// there is captured in `Output.summaryError` *after* index.md is safely on
+    /// disk.
     @discardableResult
     static func process(videoURL: URL,
                         destinationDirectory: URL,
                         mode: LanguageMode,
                         transcriber: Transcriber,
-                        summarizeWith apiKey: String? = nil,
+                        summary: SummaryRequest? = nil,
                         progress: @escaping ProgressHandler = { _, _ in }) async throws -> Output {
         let asset = AVURLAsset(url: videoURL)
         guard try await asset.load(.isReadable) else {
@@ -103,14 +112,21 @@ enum VideoFileProcessor {
                                                to: outputDirectory)
         progress(.exporting, 1)
 
-        guard let apiKey else { return Output(index: index) }
+        guard let summary else { return Output(index: index) }
         progress(.summarizing, 0)
         do {
-            let summary = try await ClaudeSummarizer.summarize(
-                frames: frames, segments: segments, sessionDirectory: outputDirectory,
-                apiKey: apiKey)
+            let summaryURL: URL
+            switch summary {
+            case .claudeCLI:
+                summaryURL = try await ClaudeCLISummarizer.summarize(
+                    frames: frames, segments: segments, sessionDirectory: outputDirectory)
+            case .api(let key):
+                summaryURL = try await ClaudeSummarizer.summarize(
+                    frames: frames, segments: segments, sessionDirectory: outputDirectory,
+                    apiKey: key)
+            }
             progress(.summarizing, 1)
-            return Output(index: index, summary: summary)
+            return Output(index: index, summary: summaryURL)
         } catch {
             NSLog("Dikta: Claude summary failed: %@", "\(error)")
             return Output(index: index, summaryError: "\(error)")

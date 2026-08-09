@@ -28,13 +28,14 @@ Everything runs on your machine. No audio or text ever leaves it.
 - 🧠 **Memory-aware** — models are unloaded after 5 idle minutes and reload in under a second
 - ⚡ **Fast** — Metal on Apple Silicon; ~0.25s for 4s of speech on an M5 Pro
 - 🖥️ **Screen recording → Markdown** — records a chosen display + system audio, detects slide changes live (perceptual hashing, no video file ever written), transcribes with timestamps, and writes `index.md`: every slide's screenshot with what was said over it
-- 🤖 **Optional Claude summary** — with your Anthropic API key (stored in Keychain), Claude Haiku reads the slides (vision) + transcript and writes a unified Hebrew `summary.md`: per-slide summaries, side topics, and action recaps for live coding/spreadsheet segments (~$0.05–0.10 per lecture)
+- 🤖 **Optional Claude summary** — Claude reads the slide images + transcript and writes a unified Hebrew `summary.md`: per-slide summaries, side topics, and action recaps for live coding/spreadsheet segments. Two engines: the local **Claude Code CLI** (default — runs on your Claude subscription, **no API credits**) or the **Messages API** with your own key (~$0.05–0.10 per lecture)
 
 ## Requirements
 
 - macOS 14+ on Apple Silicon
 - Xcode Command Line Tools only (`xcode-select --install`) — **no Xcode needed**
 - ~600MB of disk for the base model (+1.6GB for the optional Hebrew model)
+- *Only for the Claude summary:* either the [`claude` CLI](https://claude.com/claude-code) installed and logged in (default engine), or an Anthropic API key
 
 ## Installation
 
@@ -73,13 +74,22 @@ After granting Input Monitoring, quit and relaunch Dikta.
 1. Menu → **🖥 הקלט מסך** → pick a display; recording starts (red icon, live timer in the menu)
 2. Menu → **⏹ עצור הקלטה ועבד** — Dikta transcribes and writes the session folder:
    `~/Documents/Dikta/הקלטה <date>/` with `index.md` + `frames/` (one screenshot per detected slide, each with the transcript spoken over it). **No video file is ever written** — frames and audio are processed as they stream.
-3. **Claude summary (optional):** menu → "הגדר Anthropic API Key…" (stored in Keychain), enable "סיכום אוטומטי עם Claude" — each recording then also gets `summary.md`, written by Claude Haiku from the slide images + transcript.
+3. **Claude summary (optional):** menu → **"מנוע סיכום"** → pick an engine, then enable **"סיכום אוטומטי עם Claude"** — each recording then also gets `summary.md`, written by Claude from the slide images + transcript.
+
+   | Engine | Billing | Needs |
+   |---|---|---|
+   | **Claude CLI (מנוי)** — default | Your Claude subscription — **no API credits** | The `claude` CLI installed (`~/.local/bin/claude`, Homebrew, or on your login `PATH`) and logged in. It reads the full-resolution slide PNGs straight off disk with its `Read` tool. |
+   | **API key** | Anthropic API credits (~$0.05–0.10 per lecture) | A key set via menu → "הגדר Anthropic API Key…" (stored in the Keychain). Claude Haiku, images sent inline. |
+
+   The toggle stays disabled — with an explanatory tooltip — until the *selected* engine is usable.
 
 Also works on existing video files:
 
 ```bash
-dikta video lecture.mp4 --language he [-o outdir] [--summarize]
+dikta video lecture.mp4 --language he [-o outdir] [--summarize] [--engine cli|api]
 ```
+
+`--engine cli` (the default) summarizes through the local Claude Code CLI; `--engine api` uses the Anthropic key from the Keychain. The flag is only meaningful together with `--summarize`.
 
 Exit codes: `0` ok · `4` index.md produced but the summary step was skipped/failed.
 
@@ -115,6 +125,7 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `VideoFileProcessor.swift` | Same pipeline for existing video files |
 | `MarkdownExporter.swift` | Slide/transcript alignment → index.md |
 | `ClaudeSummarizer.swift` | Messages API (Haiku vision) → summary.md |
+| `ClaudeCLISummarizer.swift` | Local `claude -p` (subscription) → summary.md |
 | `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
 ## License

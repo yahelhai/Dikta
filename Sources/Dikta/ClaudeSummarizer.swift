@@ -208,7 +208,7 @@ enum ClaudeSummarizer {
 
     // MARK: - Prompt
 
-    private static let systemPrompt = """
+    static let systemPrompt = """
         אתה עוזר שמסכם הקלטות מסך של הרצאות והדגמות. אתה מקבל את השקופיות \
         (צילומי מסך) לפי הסדר, ולצד כל אחת את מה שנאמר בזמן שהיא הוצגה. \
         המשימה שלך היא להפיק מסמך סיכום אחד ומאוחד ב-Markdown, בעברית, \
@@ -217,7 +217,7 @@ enum ClaudeSummarizer {
         אל תמציא תוכן שאינו מופיע בתמלול או בתמונות.
         """
 
-    private static let instructionText = """
+    static let instructionText = """
         כתוב עכשיו את מסמך הסיכום המאוחד. כללים:
 
         1. לכל שקופית משמעותית: כותרת קצרה, מיד אחריה הטמעת התמונה בשורה \

@@ -50,7 +50,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
         menu.delegate = self
         // We drive enablement ourselves (the summary toggle is disabled until
-        // an API key exists); AppKit's automatic enabling would override it.
+        // the selected engine is usable); AppKit's automatic enabling would
+        // override it.
         menu.autoenablesItems = false
         statusItem.menu = menu
         setIcon(.idle)
@@ -233,26 +234,56 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         addSummarySection()
     }
 
-    /// Optional Claude summary: the key lives in the Keychain, and the toggle
-    /// only becomes usable once one is stored.
+    /// Optional Claude summary: pick the engine (Claude Code CLI on the user's
+    /// subscription, or the Messages API with a Keychain key), then turn the
+    /// stage on. The toggle only becomes usable once the *selected* engine can
+    /// actually run.
     private func addSummarySection() {
-        let hasKey = KeychainStore.hasAPIKey
+        let settings = Settings.shared
+        let engine = settings.summaryEngine
 
+        let engineRoot = NSMenuItem(title: "מנוע סיכום", action: nil, keyEquivalent: "")
+        let engineMenu = NSMenu()
+        engineMenu.autoenablesItems = false
+        for candidate in SummaryEngine.allCases {
+            let item = NSMenuItem(title: candidate.displayName,
+                                  action: #selector(summaryEngineSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = candidate.rawValue
+            item.state = engine == candidate ? .on : .off
+            engineMenu.addItem(item)
+        }
+        engineRoot.submenu = engineMenu
+        menu.addItem(engineRoot)
+
+        let hasKey = KeychainStore.hasAPIKey
         let keyItem = NSMenuItem(
             title: hasKey ? "הגדר Anthropic API Key… (מוגדר ✓)" : "הגדר Anthropic API Key…",
             action: #selector(setAPIKeySelected), keyEquivalent: "")
         keyItem.target = self
         menu.addItem(keyItem)
 
+        let usable = Self.isUsable(engine)
         let summaryItem = NSMenuItem(title: "סיכום אוטומטי עם Claude",
                                      action: #selector(toggleAutoSummarize), keyEquivalent: "")
         summaryItem.target = self
-        summaryItem.state = (hasKey && Settings.shared.autoSummarize) ? .on : .off
-        summaryItem.isEnabled = hasKey
-        if !hasKey {
-            summaryItem.toolTip = "נדרש Anthropic API Key כדי לסכם עם Claude"
+        summaryItem.state = (usable && settings.autoSummarize) ? .on : .off
+        summaryItem.isEnabled = usable
+        if !usable {
+            summaryItem.toolTip = engine == .claudeCLI
+                ? "לא נמצא Claude Code CLI (‏claude) במחשב — התקן אותו, או בחר במנוע API key"
+                : "נדרש Anthropic API Key כדי לסכם עם Claude"
         }
         menu.addItem(summaryItem)
+    }
+
+    /// Can the given engine run right now? CLI: the `claude` binary is
+    /// installed. API: a key is stored in the Keychain.
+    private static func isUsable(_ engine: SummaryEngine) -> Bool {
+        switch engine {
+        case .claudeCLI: return ClaudeCLISummarizer.isAvailable
+        case .apiKey: return KeychainStore.hasAPIKey
+        }
     }
 
     private func elapsedTitle(_ elapsed: TimeInterval) -> String {
@@ -344,14 +375,27 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         KeychainStore.setAPIKey(field.stringValue)
-        if !KeychainStore.hasAPIKey { Settings.shared.autoSummarize = false }
+        // Deleting the key only cancels auto-summary when the API engine is the
+        // selected one — the CLI engine never needed a key.
+        if !Self.isUsable(Settings.shared.summaryEngine) {
+            Settings.shared.autoSummarize = false
+        }
         NSLog("Dikta: Anthropic API key %@",
               KeychainStore.hasAPIKey ? "stored" : "cleared")
         rebuildMenu()
     }
 
+    @objc private func summaryEngineSelected(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let engine = SummaryEngine(rawValue: raw) else { return }
+        Settings.shared.summaryEngine = engine
+        // Switching to an engine that can't run would leave a stale "on" toggle.
+        if !Self.isUsable(engine) { Settings.shared.autoSummarize = false }
+        rebuildMenu()
+    }
+
     @objc private func toggleAutoSummarize() {
-        guard KeychainStore.hasAPIKey else { return }
+        guard Self.isUsable(Settings.shared.summaryEngine) else { return }
         Settings.shared.autoSummarize.toggle()
         rebuildMenu()
     }
