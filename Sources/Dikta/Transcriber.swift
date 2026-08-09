@@ -174,6 +174,7 @@ enum DiktaError: Error, CustomStringConvertible {
     case audioEngineFailed(String)
     case videoLoadFailed(String)
     case frameWriteFailed(String)
+    case screenCaptureFailed(String)
 
     var description: String {
         switch self {
@@ -184,6 +185,7 @@ enum DiktaError: Error, CustomStringConvertible {
         case .audioEngineFailed(let reason): return "Audio engine failed: \(reason)"
         case .videoLoadFailed(let reason): return "Video load failed: \(reason)"
         case .frameWriteFailed(let name): return "Failed to write frame \(name)"
+        case .screenCaptureFailed(let reason): return "Screen capture failed: \(reason)"
         }
     }
 }

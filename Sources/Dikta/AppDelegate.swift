@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -14,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioRecorder = AudioRecorder()
     private let transcriber = Transcriber()
     private let outputRouter = OutputRouter()
+    /// Screen recording runs completely alongside dictation — its own recorder,
+    /// its own Transcriber, its own state machine.
+    private let recordingCoordinator = RecordingCoordinator()
     private var watchdog: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -43,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController.onDownloadIvrit = { [weak self] in
             self?.downloadIvritModel()
         }
+
+        wireScreenRecording()
 
         // Warm the default model in the background so the first dictation is fast.
         preloadModelIfAvailable()
@@ -124,6 +130,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchdog?.cancel()
         state = .idle
         statusItemController.setIcon(.idle)
+    }
+
+    // MARK: - Screen recording
+
+    private func wireScreenRecording() {
+        let controller = statusItemController!
+        let coordinator = recordingCoordinator
+
+        controller.screenRecordingElapsed = { [weak coordinator] in coordinator?.elapsed }
+        controller.onStartScreenRecording = { [weak coordinator] display in
+            coordinator?.startRecording(display: display)
+        }
+        controller.onStopScreenRecording = { [weak coordinator] in
+            coordinator?.stopAndProcess()
+        }
+        controller.onChangeRecordingsFolder = { url in
+            Settings.shared.recordingsFolder = url
+            NSLog("Dikta: recordings folder set to %@", url.path)
+        }
+
+        coordinator.onStateChange = { [weak controller, weak coordinator] in
+            guard let controller, let coordinator else { return }
+            switch coordinator.state {
+            case .idle:
+                controller.screenProcessingPhase = nil
+                controller.setScreenRecordingActive(false)
+            case .recording:
+                controller.screenProcessingPhase = nil
+                controller.setScreenRecordingActive(true)
+            case .processing(let phase):
+                controller.setScreenRecordingActive(false)
+                controller.screenProcessingPhase = phase
+            }
+        }
     }
 
     // MARK: - Shortcut capture

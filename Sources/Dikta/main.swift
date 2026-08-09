@@ -30,6 +30,11 @@ if args.count >= 2, args[1] == "video" {
     cleanExit(runVideoCLI(Array(args.dropFirst(2))))
 }
 
+// Hidden headless harness for the live screen recorder (see CLI.swift).
+if args.count >= 2, args[1] == "record-test" {
+    cleanExit(runRecordTestCLI(Array(args.dropFirst(2))))
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 let delegate = AppDelegate()
