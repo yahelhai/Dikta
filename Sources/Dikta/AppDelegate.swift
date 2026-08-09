@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -14,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioRecorder = AudioRecorder()
     private let transcriber = Transcriber()
     private let outputRouter = OutputRouter()
+    /// Screen recording runs completely alongside dictation — its own recorder,
+    /// its own Transcriber, its own state machine.
+    private let recordingCoordinator = RecordingCoordinator()
     private var watchdog: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -43,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController.onDownloadIvrit = { [weak self] in
             self?.downloadIvritModel()
         }
+
+        wireScreenRecording()
 
         // Warm the default model in the background so the first dictation is fast.
         preloadModelIfAvailable()
@@ -102,7 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let (modelPath, language) = try await self.route(samples: samples, mode: mode)
+                let (modelPath, language) = try await LanguageRouter.route(
+                    samples: samples, mode: mode, transcriber: self.transcriber)
                 let text = try await self.transcriber.transcribe(
                     samples: samples, language: language, modelPath: modelPath)
                 if !text.isEmpty {
@@ -125,26 +132,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController.setIcon(.idle)
     }
 
-    /// Pick model + language for this dictation. In Auto mode with the ivrit
-    /// model available, detect the language first (fast encoder pass on the
-    /// stock model) and route Hebrew to the ivrit fine-tune — it is far more
-    /// accurate for Hebrew but must run with an explicit "he" and can't handle
-    /// other languages.
-    private func route(samples: [Float], mode: LanguageMode) async throws -> (modelPath: String, language: String?) {
-        let stockPath = ModelManager.shared.localURL(for: ModelManager.stockTurboQ5).path
-        let ivritPath = ModelManager.shared.localURL(for: ModelManager.ivritTurbo).path
-        let ivritAvailable = ModelManager.shared.isDownloaded(ModelManager.ivritTurbo)
+    // MARK: - Screen recording
 
-        switch mode {
-        case .english:
-            return (stockPath, "en")
-        case .hebrew:
-            return (ivritAvailable ? ivritPath : stockPath, "he")
-        case .auto:
-            guard ivritAvailable else { return (stockPath, nil) }
-            let detected = try await transcriber.detectLanguage(samples: samples, modelPath: stockPath)
-            NSLog("Dikta: detected language '%@'", detected)
-            return detected == "he" ? (ivritPath, "he") : (stockPath, detected)
+    private func wireScreenRecording() {
+        let controller = statusItemController!
+        let coordinator = recordingCoordinator
+
+        controller.screenRecordingElapsed = { [weak coordinator] in coordinator?.elapsed }
+        controller.onStartScreenRecording = { [weak coordinator] display in
+            coordinator?.startRecording(display: display)
+        }
+        controller.onStopScreenRecording = { [weak coordinator] in
+            coordinator?.stopAndProcess()
+        }
+        controller.onChangeRecordingsFolder = { url in
+            Settings.shared.recordingsFolder = url
+            NSLog("Dikta: recordings folder set to %@", url.path)
+        }
+
+        coordinator.onStateChange = { [weak controller, weak coordinator] in
+            guard let controller, let coordinator else { return }
+            switch coordinator.state {
+            case .idle:
+                controller.screenProcessingPhase = nil
+                controller.setScreenRecordingActive(false)
+            case .recording:
+                controller.screenProcessingPhase = nil
+                controller.setScreenRecordingActive(true)
+            case .processing(let phase):
+                controller.setScreenRecordingActive(false)
+                controller.screenProcessingPhase = phase
+            }
         }
     }
 

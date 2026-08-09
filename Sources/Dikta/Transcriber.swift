@@ -79,6 +79,52 @@ actor Transcriber {
         return try run(nil)
     }
 
+    /// Transcribe with per-segment timestamps — the screen-recording pipeline
+    /// needs to know *when* each sentence was said so it can be attached to the
+    /// frame that was on screen at the time.
+    ///
+    /// Same inference path as `transcribe`, only with whisper's timestamps kept
+    /// (printing stays off — we read the segments through the API).
+    func transcribeSegments(samples: [Float], language: String?,
+                            modelPath: String) throws -> [TranscriptSegment] {
+        guard !samples.isEmpty else { return [] }
+        let ctx = try context(for: modelPath)
+        defer { scheduleIdleUnload() }
+
+        var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
+        params.print_realtime = false
+        params.print_progress = false
+        params.print_timestamps = false
+        params.print_special = false
+        params.no_timestamps = false
+        params.suppress_blank = true
+        params.n_threads = Int32(min(8, ProcessInfo.processInfo.activeProcessorCount))
+
+        let run: (UnsafePointer<CChar>?) throws -> [TranscriptSegment] = { langPtr in
+            params.language = langPtr
+            let status = samples.withUnsafeBufferPointer { buf in
+                whisper_full(ctx, params, buf.baseAddress, Int32(buf.count))
+            }
+            guard status == 0 else { throw DiktaError.transcriptionFailed(Int(status)) }
+            var segments: [TranscriptSegment] = []
+            for i in 0..<whisper_full_n_segments(ctx) {
+                guard let raw = whisper_full_get_segment_text(ctx, i) else { continue }
+                let text = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                // whisper reports segment bounds in centiseconds.
+                let start = Double(whisper_full_get_segment_t0(ctx, i)) * 0.01
+                let end = Double(whisper_full_get_segment_t1(ctx, i)) * 0.01
+                segments.append(TranscriptSegment(start: start, end: end, text: text))
+            }
+            return segments
+        }
+
+        if let language {
+            return try language.withCString { try run($0) }
+        }
+        return try run(nil)
+    }
+
     // MARK: - Context cache
 
     private func context(for path: String) throws -> OpaquePointer {
@@ -110,12 +156,26 @@ actor Transcriber {
     }
 }
 
+/// One timestamped chunk of transcript, as whisper segmented it.
+struct TranscriptSegment: Sendable {
+    let start: TimeInterval
+    let end: TimeInterval
+    let text: String
+
+    /// Midpoint of the segment — what the frame alignment matches on.
+    var midpoint: TimeInterval { (start + end) / 2 }
+}
+
 enum DiktaError: Error, CustomStringConvertible {
     case modelLoadFailed(String)
     case modelNotLoaded
     case transcriptionFailed(Int)
     case audioLoadFailed(String)
     case audioEngineFailed(String)
+    case videoLoadFailed(String)
+    case frameWriteFailed(String)
+    case screenCaptureFailed(String)
+    case summaryFailed(String)
 
     var description: String {
         switch self {
@@ -124,6 +184,10 @@ enum DiktaError: Error, CustomStringConvertible {
         case .transcriptionFailed(let code): return "whisper_full failed with code \(code)"
         case .audioLoadFailed(let reason): return "Audio load failed: \(reason)"
         case .audioEngineFailed(let reason): return "Audio engine failed: \(reason)"
+        case .videoLoadFailed(let reason): return "Video load failed: \(reason)"
+        case .frameWriteFailed(let name): return "Failed to write frame \(name)"
+        case .screenCaptureFailed(let reason): return "Screen capture failed: \(reason)"
+        case .summaryFailed(let reason): return "Claude summary failed: \(reason)"
         }
     }
 }

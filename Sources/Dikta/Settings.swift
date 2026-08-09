@@ -34,6 +34,8 @@ final class Settings {
         static let shortcut = "dikta.shortcut"
         static let launchAtLogin = "dikta.launchAtLogin"
         static let appendTrailingSpace = "dikta.appendTrailingSpace"
+        static let recordingsFolder = "dikta.recordingsFolder"
+        static let autoSummarize = "dikta.autoSummarize"
     }
 
     var languageMode: LanguageMode {
@@ -68,5 +70,38 @@ final class Settings {
             ? true
             : defaults.bool(forKey: Key.appendTrailingSpace) }
         set { defaults.set(newValue, forKey: Key.appendTrailingSpace) }
+    }
+
+    /// Run the (optional) Claude summary stage after a screen recording.
+    /// Default: off — it only takes effect when an API key is configured.
+    var autoSummarize: Bool {
+        get { defaults.bool(forKey: Key.autoSummarize) }
+        set { defaults.set(newValue, forKey: Key.autoSummarize) }
+    }
+
+    /// Where screen recordings are written. Stored as a path string; the folder
+    /// itself is created on demand by `ensureRecordingsFolder()`.
+    var recordingsFolder: URL {
+        get {
+            if let path = defaults.string(forKey: Key.recordingsFolder), !path.isEmpty {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+            return Self.defaultRecordingsFolder
+        }
+        set { defaults.set(newValue.path, forKey: Key.recordingsFolder) }
+    }
+
+    static var defaultRecordingsFolder: URL {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+        return documents.appendingPathComponent("Dikta", isDirectory: true)
+    }
+
+    /// Create the recordings folder if it isn't there yet, and return it.
+    @discardableResult
+    func ensureRecordingsFolder() -> URL {
+        let folder = recordingsFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
     }
 }
