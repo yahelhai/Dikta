@@ -17,15 +17,15 @@ if args.count >= 2, args[1] == "sysinfo" {
     cleanExit(0)
 }
 
-if args.count >= 3, args[1] == "transcribe" {
+// >= 2 so a bare subcommand prints usage instead of launching the menu bar app.
+if args.count >= 2, args[1] == "transcribe" {
     cleanExit(runTranscribeCLI(Array(args.dropFirst(2))))
 }
 
-if args.count >= 3, args[1] == "detect" {
+if args.count >= 2, args[1] == "detect" {
     cleanExit(runDetectCLI(Array(args.dropFirst(2))))
 }
 
-// >= 2 so a bare `dikta video` prints usage instead of launching the menu bar app.
 if args.count >= 2, args[1] == "video" {
     cleanExit(runVideoCLI(Array(args.dropFirst(2))))
 }
