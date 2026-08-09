@@ -52,6 +52,7 @@ final class Settings {
         static let recordingsFolder = "dikta.recordingsFolder"
         static let autoSummarize = "dikta.autoSummarize"
         static let summaryEngine = "dikta.summaryEngine"
+        static let apiKeyConfigured = "dikta.apiKeyConfigured"
     }
 
     var languageMode: LanguageMode {
@@ -100,6 +101,16 @@ final class Settings {
     var summaryEngine: SummaryEngine {
         get { SummaryEngine(rawValue: defaults.string(forKey: Key.summaryEngine) ?? "") ?? .claudeCLI }
         set { defaults.set(newValue.rawValue, forKey: Key.summaryEngine) }
+    }
+
+    /// Mirror of "an API key is stored in the Keychain", maintained by the
+    /// set-key dialog. The menu reads THIS flag, never the Keychain itself —
+    /// a passive SecItem read from a rebuilt binary makes macOS pop a Keychain
+    /// authorization dialog on every menu open, which made the app unusable.
+    /// The Keychain is only touched when an API-engine summary actually runs.
+    var apiKeyConfigured: Bool {
+        get { defaults.bool(forKey: Key.apiKeyConfigured) }
+        set { defaults.set(newValue, forKey: Key.apiKeyConfigured) }
     }
 
     /// Where screen recordings are written. Stored as a path string; the folder

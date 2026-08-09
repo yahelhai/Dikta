@@ -68,8 +68,11 @@ enum KeychainStore {
         }
     }
 
-    /// True when a key is present — used for menu state without exposing it.
-    static var hasAPIKey: Bool { apiKey() != nil }
+    // NOTE: there is deliberately no `hasAPIKey` presence check. Any read hits
+    // SecItemCopyMatching, and a rebuilt binary no longer satisfies the stored
+    // item's ACL, so macOS prompts for authorization — once per call. The menu
+    // uses `Settings.shared.apiKeyConfigured` instead; only code that is about
+    // to make an API request may call `apiKey()`.
 
     private static func deleteAPIKey() {
         let query: [String: Any] = [

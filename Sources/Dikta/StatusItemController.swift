@@ -256,7 +256,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         engineRoot.submenu = engineMenu
         menu.addItem(engineRoot)
 
-        let hasKey = KeychainStore.hasAPIKey
+        // Cached flag, never the Keychain: a passive SecItem read here would
+        // pop a macOS authorization dialog every time the menu opens.
+        let hasKey = settings.apiKeyConfigured
         let keyItem = NSMenuItem(
             title: hasKey ? "הגדר Anthropic API Key… (מוגדר ✓)" : "הגדר Anthropic API Key…",
             action: #selector(setAPIKeySelected), keyEquivalent: "")
@@ -278,11 +280,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// Can the given engine run right now? CLI: the `claude` binary is
-    /// installed. API: a key is stored in the Keychain.
+    /// installed. API: a key is stored — answered from the cached
+    /// `apiKeyConfigured` flag so the menu never touches the Keychain.
     private static func isUsable(_ engine: SummaryEngine) -> Bool {
         switch engine {
         case .claudeCLI: return ClaudeCLISummarizer.isAvailable
-        case .apiKey: return KeychainStore.hasAPIKey
+        case .apiKey: return Settings.shared.apiKeyConfigured
         }
     }
 
@@ -375,13 +378,18 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         KeychainStore.setAPIKey(field.stringValue)
+        // Mirror the write into the cached flag the menu reads. `setAPIKey`
+        // trims and treats blank as a delete, so mirror that same rule here
+        // instead of reading the item back (a read would re-prompt).
+        let stored = !field.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        Settings.shared.apiKeyConfigured = stored
         // Deleting the key only cancels auto-summary when the API engine is the
         // selected one — the CLI engine never needed a key.
         if !Self.isUsable(Settings.shared.summaryEngine) {
             Settings.shared.autoSummarize = false
         }
-        NSLog("Dikta: Anthropic API key %@",
-              KeychainStore.hasAPIKey ? "stored" : "cleared")
+        NSLog("Dikta: Anthropic API key %@", stored ? "stored" : "cleared")
         rebuildMenu()
     }
 
