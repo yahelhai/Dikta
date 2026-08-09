@@ -35,6 +35,7 @@ final class Settings {
         static let launchAtLogin = "dikta.launchAtLogin"
         static let appendTrailingSpace = "dikta.appendTrailingSpace"
         static let recordingsFolder = "dikta.recordingsFolder"
+        static let autoSummarize = "dikta.autoSummarize"
     }
 
     var languageMode: LanguageMode {
@@ -69,6 +70,13 @@ final class Settings {
             ? true
             : defaults.bool(forKey: Key.appendTrailingSpace) }
         set { defaults.set(newValue, forKey: Key.appendTrailingSpace) }
+    }
+
+    /// Run the (optional) Claude summary stage after a screen recording.
+    /// Default: off — it only takes effect when an API key is configured.
+    var autoSummarize: Bool {
+        get { defaults.bool(forKey: Key.autoSummarize) }
+        set { defaults.set(newValue, forKey: Key.autoSummarize) }
     }
 
     /// Where screen recordings are written. Stored as a path string; the folder

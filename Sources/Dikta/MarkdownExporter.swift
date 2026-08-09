@@ -33,15 +33,13 @@ enum MarkdownExporter {
     static func render(title: String, date: Date, duration: TimeInterval,
                        frames: [Frame], segments: [TranscriptSegment]) -> String {
         let clean = deduplicated(segments)
+        let spokenPerFrame = align(frames: frames, segments: segments)
         var lines: [String] = []
         lines.append("# \(title) — \(dateString(date)) (משך \(timecode(duration)))")
         lines.append("")
 
         for (index, frame) in frames.enumerated() {
-            let upperBound = index + 1 < frames.count ? frames[index + 1].timestamp : .infinity
-            // The first frame also owns anything said before it appeared.
-            let lowerBound = index == 0 ? -Double.infinity : frame.timestamp
-            let spoken = clean.filter { $0.midpoint >= lowerBound && $0.midpoint < upperBound }
+            let spoken = spokenPerFrame[index]
 
             lines.append("## שקופית \(index + 1) · [\(timecode(frame.timestamp))]")
             lines.append("")
@@ -74,6 +72,20 @@ enum MarkdownExporter {
     }
 
     // MARK: - Helpers
+
+    /// What was said while each frame was on screen, in frame order: a frame at
+    /// time t_i owns the (deduplicated) segments whose midpoint falls in
+    /// [t_i, t_{i+1}). The first frame also owns anything said before it
+    /// appeared. Shared with the Claude summarizer so both documents describe
+    /// the same slides.
+    static func align(frames: [Frame], segments: [TranscriptSegment]) -> [[TranscriptSegment]] {
+        let clean = deduplicated(segments)
+        return frames.enumerated().map { index, frame in
+            let upperBound = index + 1 < frames.count ? frames[index + 1].timestamp : .infinity
+            let lowerBound = index == 0 ? -Double.infinity : frame.timestamp
+            return clean.filter { $0.midpoint >= lowerBound && $0.midpoint < upperBound }
+        }
+    }
 
     /// Whisper hallucinates repeated phrases over silence — drop segments whose
     /// text repeats the previous one.

@@ -49,6 +49,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         menu.delegate = self
+        // We drive enablement ourselves (the summary toggle is disabled until
+        // an API key exists); AppKit's automatic enabling would override it.
+        menu.autoenablesItems = false
         statusItem.menu = menu
         setIcon(.idle)
         rebuildMenu()
@@ -226,6 +229,30 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             action: #selector(changeRecordingsFolderSelected), keyEquivalent: "")
         folderItem.target = self
         menu.addItem(folderItem)
+
+        addSummarySection()
+    }
+
+    /// Optional Claude summary: the key lives in the Keychain, and the toggle
+    /// only becomes usable once one is stored.
+    private func addSummarySection() {
+        let hasKey = KeychainStore.hasAPIKey
+
+        let keyItem = NSMenuItem(
+            title: hasKey ? "הגדר Anthropic API Key… (מוגדר ✓)" : "הגדר Anthropic API Key…",
+            action: #selector(setAPIKeySelected), keyEquivalent: "")
+        keyItem.target = self
+        menu.addItem(keyItem)
+
+        let summaryItem = NSMenuItem(title: "סיכום אוטומטי עם Claude",
+                                     action: #selector(toggleAutoSummarize), keyEquivalent: "")
+        summaryItem.target = self
+        summaryItem.state = (hasKey && Settings.shared.autoSummarize) ? .on : .off
+        summaryItem.isEnabled = hasKey
+        if !hasKey {
+            summaryItem.toolTip = "נדרש Anthropic API Key כדי לסכם עם Claude"
+        }
+        menu.addItem(summaryItem)
     }
 
     private func elapsedTitle(_ elapsed: TimeInterval) -> String {
@@ -295,6 +322,37 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         onChangeRecordingsFolder?(url)
+        rebuildMenu()
+    }
+
+    /// Prompt for the API key. The value goes straight to the Keychain and is
+    /// never logged or held anywhere else; an empty field deletes it.
+    @objc private func setAPIKeySelected() {
+        let alert = NSAlert()
+        alert.messageText = "מפתח Anthropic API"
+        alert.informativeText =
+            "הדבק מפתח API כדי לאפשר סיכום אוטומטי עם Claude. שדה ריק מוחק את המפתח השמור."
+        alert.addButton(withTitle: "שמור")
+        alert.addButton(withTitle: "ביטול")
+
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.placeholderString = "sk-ant-…"
+        alert.accessoryView = field
+
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        KeychainStore.setAPIKey(field.stringValue)
+        if !KeychainStore.hasAPIKey { Settings.shared.autoSummarize = false }
+        NSLog("Dikta: Anthropic API key %@",
+              KeychainStore.hasAPIKey ? "stored" : "cleared")
+        rebuildMenu()
+    }
+
+    @objc private func toggleAutoSummarize() {
+        guard KeychainStore.hasAPIKey else { return }
+        Settings.shared.autoSummarize.toggle()
         rebuildMenu()
     }
 

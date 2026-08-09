@@ -100,7 +100,7 @@ final class RecordingCoordinator {
             guard let self else { return }
             do {
                 let result = try await self.recorder.stop()
-                let index = try await Self.process(
+                let output = try await Self.process(
                     result: result, sessionDirectory: directory, mode: mode,
                     transcriber: transcriber
                 ) { phase in
@@ -108,8 +108,11 @@ final class RecordingCoordinator {
                         self?.state = .processing(phase: phase)
                     }
                 }
+                // index.md is done; the summary is optional and never risks it.
+                let document = await self.summarizeIfEnabled(output: output,
+                                                             sessionDirectory: directory)
                 self.state = .idle
-                await self.present(index: index)
+                await self.present(index: document)
             } catch {
                 NSLog("Dikta: screen recording failed: %@", "\(error)")
                 self.state = .idle
@@ -117,9 +120,42 @@ final class RecordingCoordinator {
         }
     }
 
+    /// Run the Claude summary when a key is configured and the toggle is on.
+    /// Returns the document to open: `summary.md` on success, `index.md`
+    /// whenever the stage is skipped or fails.
+    private func summarizeIfEnabled(output: Output, sessionDirectory: URL) async -> URL {
+        guard let apiKey = KeychainStore.apiKey(), Settings.shared.autoSummarize else {
+            return output.index
+        }
+        state = .processing(phase: "מסכם עם Claude…")
+        do {
+            return try await ClaudeSummarizer.summarize(
+                frames: output.frames, segments: output.segments,
+                sessionDirectory: sessionDirectory, apiKey: apiKey
+            ) { phase in
+                Task { @MainActor [weak self] in
+                    self?.state = .processing(phase: phase)
+                }
+            }
+        } catch {
+            NSLog("Dikta: Claude summary failed: %@", "\(error)")
+            await notify(title: "הסיכום עם Claude נכשל",
+                         body: "ה-Markdown המקומי נשמר כרגיל.")
+            return output.index
+        }
+    }
+
     private var pendingDirectory: URL?
 
     // MARK: - Pipeline (shared with the `record-test` CLI)
+
+    /// What `process` produced: the written `index.md` plus the material an
+    /// optional summary stage needs.
+    struct Output: Sendable {
+        let index: URL
+        let frames: [MarkdownExporter.Frame]
+        let segments: [TranscriptSegment]
+    }
 
     /// Transcribe the recorded audio, align it to the kept frames and write
     /// `index.md`. Deletes the temporary WAV, so the session directory is left
@@ -130,7 +166,7 @@ final class RecordingCoordinator {
                                     mode: LanguageMode,
                                     transcriber: Transcriber,
                                     progress: @escaping @Sendable (String) -> Void = { _ in }
-    ) async throws -> URL {
+    ) async throws -> Output {
         defer {
             if let audioURL = result.audioURL {
                 try? FileManager.default.removeItem(at: audioURL)
@@ -153,13 +189,14 @@ final class RecordingCoordinator {
         }
 
         progress("כותב Markdown…")
-        return try MarkdownExporter.write(
+        let index = try MarkdownExporter.write(
             title: "הקלטת מסך",
             date: result.startedAt,
             duration: result.duration,
             frames: result.frames,
             segments: segments,
             to: sessionDirectory)
+        return Output(index: index, frames: result.frames, segments: segments)
     }
 
     /// `<recordings>/הקלטה 2026-07-09 14.30/`, uniquified if it already exists.
@@ -181,17 +218,20 @@ final class RecordingCoordinator {
 
     private func present(index: URL) async {
         NSWorkspace.shared.open(index)
+        NSLog("Dikta: screen recording ready: %@", index.path)
+        await notify(title: "הקלטת המסך מוכנה",
+                     body: index.deletingLastPathComponent().lastPathComponent)
+    }
+
+    private func notify(title: String, body: String) async {
         // UNUserNotificationCenter traps when the process isn't a real bundle.
-        guard Bundle.main.bundleURL.pathExtension == "app" else {
-            NSLog("Dikta: screen recording ready: %@", index.path)
-            return
-        }
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert])) ?? false
         guard granted else { return }
         let content = UNMutableNotificationContent()
-        content.title = "הקלטת המסך מוכנה"
-        content.body = index.deletingLastPathComponent().lastPathComponent
+        content.title = title
+        content.body = body
         try? await center.add(UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil))
     }

@@ -16,6 +16,7 @@ enum VideoFileProcessor {
         case extractingFrames
         case transcribing
         case exporting
+        case summarizing
 
         var label: String {
             switch self {
@@ -23,7 +24,23 @@ enum VideoFileProcessor {
             case .extractingFrames: return "frames"
             case .transcribing: return "transcribe"
             case .exporting: return "export"
+            case .summarizing: return "summarize"
             }
+        }
+    }
+
+    /// The written `index.md`, plus `summary.md` when the optional Claude
+    /// stage ran and succeeded. A summary failure is reported here rather than
+    /// thrown, so index.md is never lost to it.
+    struct Output: Sendable {
+        let index: URL
+        let summary: URL?
+        let summaryError: String?
+
+        init(index: URL, summary: URL? = nil, summaryError: String? = nil) {
+            self.index = index
+            self.summary = summary
+            self.summaryError = summaryError
         }
     }
 
@@ -41,13 +58,15 @@ enum VideoFileProcessor {
     private static let hashingMaxSize = CGSize(width: 960, height: 960)
 
     /// Process `videoURL` into `<destinationDirectory>/<video-basename>/index.md`.
-    /// Returns the URL of the generated index.md.
+    /// When `apiKey` is non-nil, also asks Claude for a `summary.md`; a failure
+    /// there is thrown *after* index.md is safely on disk.
     @discardableResult
     static func process(videoURL: URL,
                         destinationDirectory: URL,
                         mode: LanguageMode,
                         transcriber: Transcriber,
-                        progress: @escaping ProgressHandler = { _, _ in }) async throws -> URL {
+                        summarizeWith apiKey: String? = nil,
+                        progress: @escaping ProgressHandler = { _, _ in }) async throws -> Output {
         let asset = AVURLAsset(url: videoURL)
         guard try await asset.load(.isReadable) else {
             throw DiktaError.videoLoadFailed("cannot read \(videoURL.path)")
@@ -83,7 +102,19 @@ enum VideoFileProcessor {
                                                frames: frames, segments: segments,
                                                to: outputDirectory)
         progress(.exporting, 1)
-        return index
+
+        guard let apiKey else { return Output(index: index) }
+        progress(.summarizing, 0)
+        do {
+            let summary = try await ClaudeSummarizer.summarize(
+                frames: frames, segments: segments, sessionDirectory: outputDirectory,
+                apiKey: apiKey)
+            progress(.summarizing, 1)
+            return Output(index: index, summary: summary)
+        } catch {
+            NSLog("Dikta: Claude summary failed: %@", "\(error)")
+            return Output(index: index, summaryError: "\(error)")
+        }
     }
 
     // MARK: - Audio

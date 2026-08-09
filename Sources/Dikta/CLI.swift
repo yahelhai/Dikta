@@ -26,16 +26,20 @@ func runDetectCLI(_ args: [String]) -> Int32 {
     return exitCode
 }
 
-// dikta video <file> [-o <destDir>] [--language he|en|auto]
-// Turns a video into <destDir>/<basename>/index.md + frames/.
+// dikta video <file> [-o <destDir>] [--language he|en|auto] [--summarize]
+// Turns a video into <destDir>/<basename>/index.md + frames/, and with
+// --summarize also <destDir>/<basename>/summary.md via Claude.
 func runVideoCLI(_ args: [String]) -> Int32 {
     var videoPath: String?
     var destPath: String?
     var mode: LanguageMode = .auto
+    var summarize = false
 
     var i = 0
     while i < args.count {
         switch args[i] {
+        case "--summarize":
+            summarize = true
         case "-o", "--output":
             i += 1
             guard i < args.count else { break }
@@ -59,7 +63,7 @@ func runVideoCLI(_ args: [String]) -> Int32 {
 
     guard let videoPath else {
         FileHandle.standardError.write(
-            "usage: dikta video <video-file> [-o <dest-dir>] [--language he|en|auto]\n".data(using: .utf8)!)
+            "usage: dikta video <video-file> [-o <dest-dir>] [--language he|en|auto] [--summarize]\n".data(using: .utf8)!)
         return 2
     }
     let videoURL = URL(fileURLWithPath: videoPath).standardizedFileURL
@@ -77,23 +81,47 @@ func runVideoCLI(_ args: [String]) -> Int32 {
         return 3
     }
 
+    // The key lives in the Keychain; without one we still produce index.md and
+    // report the missing summary through the exit code.
+    let apiKey = summarize ? KeychainStore.apiKey() : nil
+    if summarize && apiKey == nil {
+        FileHandle.standardError.write("""
+            error: no Anthropic API key found in the Keychain — summary skipped.
+            שגיאה: לא נמצא מפתח Anthropic API — הסיכום דולג. הגדר מפתח מתפריט Dikta \
+            ("הגדר Anthropic API Key…"). ה-index.md נוצר כרגיל.
+
+            """.data(using: .utf8)!)
+    }
+
     let semaphore = DispatchSemaphore(value: 0)
     nonisolated(unsafe) var exitCode: Int32 = 0
     let selectedMode = mode
+    let wantsSummary = summarize
+    let key = apiKey
 
     Task {
         defer { semaphore.signal() }
         do {
             let reporter = ProgressReporter()
-            let index = try await VideoFileProcessor.process(
+            let output = try await VideoFileProcessor.process(
                 videoURL: videoURL,
                 destinationDirectory: destination,
                 mode: selectedMode,
-                transcriber: Transcriber()
+                transcriber: Transcriber(),
+                summarizeWith: key
             ) { phase, fraction in
                 reporter.report(phase: phase, fraction: fraction)
             }
-            print(index.path)
+            print(output.index.path)
+            if let summary = output.summary {
+                print(summary.path)
+            }
+            if let failure = output.summaryError {
+                FileHandle.standardError.write(
+                    "error: summary failed: \(failure)\n".data(using: .utf8)!)
+            }
+            // Partial success: index.md is there, the summary isn't.
+            if wantsSummary && output.summary == nil { exitCode = 4 }
         } catch {
             FileHandle.standardError.write("error: \(error)\n".data(using: .utf8)!)
             exitCode = 1
@@ -181,13 +209,13 @@ func runRecordTestCLI(_ args: [String]) -> Int32 {
                 note("wav samples=\(samples.count) (\(String(format: "%.1f", Double(samples.count) / 16000))s)")
             }
 
-            let index = try await RecordingCoordinator.process(
+            let output = try await RecordingCoordinator.process(
                 result: result, sessionDirectory: sessionDirectory,
                 mode: selectedMode, transcriber: Transcriber()
             ) { phase in
                 note(phase)
             }
-            print(index.path)
+            print(output.index.path)
         } catch {
             FileHandle.standardError.write("error: \(error)\n".data(using: .utf8)!)
             await recorder.cancel()
