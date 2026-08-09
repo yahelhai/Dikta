@@ -3,9 +3,10 @@
 
 # Dikta
 
-**Local voice dictation for macOS — Hebrew & English, no cloud, no subscription**
+**Local voice dictation & lecture capture for macOS — Hebrew & English, no cloud required**
 
 Push-to-talk dictation powered by whisper.cpp. Hold a key, speak, release — the text appears.
+Plus: record your screen during a lecture and get a Markdown doc of every slide with what was said about it.
 </div>
 
 ---
@@ -26,6 +27,8 @@ Everything runs on your machine. No audio or text ever leaves it.
 - ⌨️ **Custom shortcut** — a single key or a combo (⌃⌥Space etc.), captured from the menu
 - 🧠 **Memory-aware** — models are unloaded after 5 idle minutes and reload in under a second
 - ⚡ **Fast** — Metal on Apple Silicon; ~0.25s for 4s of speech on an M5 Pro
+- 🖥️ **Screen recording → Markdown** — records a chosen display + system audio, detects slide changes live (perceptual hashing, no video file ever written), transcribes with timestamps, and writes `index.md`: every slide's screenshot with what was said over it
+- 🤖 **Optional Claude summary** — with your Anthropic API key (stored in Keychain), Claude Haiku reads the slides (vision) + transcript and writes a unified Hebrew `summary.md`: per-slide summaries, side topics, and action recaps for live coding/spreadsheet segments (~$0.05–0.10 per lecture)
 
 ## Requirements
 
@@ -54,6 +57,7 @@ Dikta needs three permissions — its menu shows ✓/✗ for each and opens the 
 | Microphone | Recording your speech |
 | Accessibility | Injecting text and detecting the focused text field |
 | Input Monitoring | Listening for the global shortcut (CGEventTap) |
+| Screen Recording | Only for the screen-recording feature — requested on first use, never at launch |
 
 After granting Input Monitoring, quit and relaunch Dikta.
 
@@ -64,6 +68,21 @@ After granting Input Monitoring, quit and relaunch Dikta.
 3. **Better Hebrew:** menu → "Download improved Hebrew model (ivrit.ai)…" — once downloaded, Auto mode routes every Hebrew dictation to it automatically
 4. **Language modes:** Auto (detection) / English / Hebrew
 
+### Screen recording (lectures, meetings)
+
+1. Menu → **🖥 הקלט מסך** → pick a display; recording starts (red icon, live timer in the menu)
+2. Menu → **⏹ עצור הקלטה ועבד** — Dikta transcribes and writes the session folder:
+   `~/Documents/Dikta/הקלטה <date>/` with `index.md` + `frames/` (one screenshot per detected slide, each with the transcript spoken over it). **No video file is ever written** — frames and audio are processed as they stream.
+3. **Claude summary (optional):** menu → "הגדר Anthropic API Key…" (stored in Keychain), enable "סיכום אוטומטי עם Claude" — each recording then also gets `summary.md`, written by Claude Haiku from the slide images + transcript.
+
+Also works on existing video files:
+
+```bash
+dikta video lecture.mp4 --language he [-o outdir] [--summarize]
+```
+
+Exit codes: `0` ok · `4` index.md produced but the summary step was skipped/failed.
+
 ## Development
 
 ```bash
@@ -71,6 +90,7 @@ swift build                                    # build
 ./.build/debug/Dikta sysinfo                   # verify whisper + Metal
 ./.build/debug/Dikta transcribe file.wav --language he
 ./.build/debug/Dikta detect file.wav           # language detection only
+./.build/debug/Dikta video file.mov --language he --summarize
 make bundle && make install                    # package + install
 ```
 
@@ -90,6 +110,11 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `FocusInspector.swift` | AX API — is focus in a text field |
 | `OutputRouter.swift` | Injection (pasteboard + ⌘V) or copy to clipboard |
 | `ModelManager.swift` | Model registry, download and storage |
+| `LiveRecorder.swift` | ScreenCaptureKit stream — 1fps frames + system audio |
+| `SceneCollector.swift` | dHash slide detection + async PNG writes |
+| `VideoFileProcessor.swift` | Same pipeline for existing video files |
+| `MarkdownExporter.swift` | Slide/transcript alignment → index.md |
+| `ClaudeSummarizer.swift` | Messages API (Haiku vision) → summary.md |
 | `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
 ## License
