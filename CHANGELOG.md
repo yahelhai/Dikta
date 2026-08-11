@@ -18,7 +18,9 @@ bar.
   tint renders as nothing at all on current macOS, so the obvious one-line fix
   made it invisible. The colour now comes from a palette symbol configuration,
   which was verified against a standalone status item rather than assumed.
-  Dictation stays neutral: macOS already shows its own microphone indicator.
+  Idle is now the only state without a colour, so "Dikta is doing something" is
+  legible at a glance: orange while it is listening to you, red while it is
+  capturing the screen.
 - **Dictating during a screen recording hid the recording icon for good.** The
   comment claimed the red circle won, but the guard only ran on the stop path:
   dictation overwrote the icon, left it at `mic`, and the restore then declined

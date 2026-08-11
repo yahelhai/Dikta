@@ -91,32 +91,36 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let state = Self.resolveIcon(
             dictation: dictationState, screenRecording: screenRecordingActive)
 
-        let (symbol, description): (String, String)
+        // Idle is the only state without a colour, so "Dikta is doing
+        // something" is legible at a glance: orange while it is listening to
+        // you, red while it is capturing the screen.
+        let (symbol, description, colour): (String, String, NSColor?)
         switch state {
-        case .idle: (symbol, description) = ("mic", "Dikta idle")
-        case .recording: (symbol, description) = ("mic.fill", "Dikta recording")
-        case .transcribing: (symbol, description) = ("waveform", "Dikta transcribing")
-        case .screenRecording: (symbol, description) = ("record.circle", "Dikta screen recording")
+        case .idle:
+            (symbol, description, colour) = ("mic", "Dikta idle", nil)
+        case .recording:
+            (symbol, description, colour) = ("mic.fill", "Dikta recording", .systemOrange)
+        case .transcribing:
+            (symbol, description, colour) = ("waveform", "Dikta transcribing", .systemOrange)
+        case .screenRecording:
+            (symbol, description, colour) = ("record.circle", "Dikta screen recording", .systemRed)
         }
 
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
 
-        // Red means "something on this screen is being captured". Dictation
-        // stays neutral — macOS already shows its own microphone indicator.
-        //
         // The colour comes from a palette symbol configuration, not from
         // `button.contentTintColor`. Two things are wrong with the tint, both
-        // checked against a standalone status item rather than assumed:
-        // a tint paints template images only, so the original code's
+        // checked against a standalone status item rather than assumed: a tint
+        // paints template images only, so the original code's
         // `isTemplate = !isRed` cancelled out the very tint it was paired with
         // and the icon rendered black; and a template image that *does* carry a
         // tint renders as nothing at all in the menu bar on current macOS.
-        if state == .screenRecording,
-           let red = image?.withSymbolConfiguration(.init(paletteColors: [.systemRed])) {
+        if let colour,
+           let coloured = image?.withSymbolConfiguration(.init(paletteColors: [colour])) {
             // A coloured icon opts out of template rendering, and with it the
-            // inversion while the menu is open. That is the price of red.
-            red.isTemplate = false
-            button.image = red
+            // inversion while the menu is open. That is the price of colour.
+            coloured.isTemplate = false
+            button.image = coloured
         } else {
             image?.isTemplate = true
             button.image = image

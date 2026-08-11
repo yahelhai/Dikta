@@ -56,7 +56,14 @@ make install   # builds and installs to /Applications
 open /Applications/Dikta.app
 ```
 
-Dikta is a menu-bar app with no dock icon and no windows — look for the microphone in the menu bar.
+Dikta is a menu-bar app with no dock icon and no windows — look for the microphone in the menu bar. It tells you what it is doing by colour:
+
+| Icon | Meaning |
+|---|---|
+| 🎙 grey | Idle |
+| 🎙 orange | Listening to you dictate |
+| 〰️ orange | Transcribing what you said |
+| ⏺ red | Recording a screen — from the menu or from `dikta record` |
 
 `make cert` matters more than it looks: it creates a stable `dikta-dev` signing identity so macOS keeps your granted permissions across rebuilds. Without it every new build looks like a new app and you re-grant everything.
 
