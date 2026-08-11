@@ -35,6 +35,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var displays: [SCDisplay] = []
     private var isRefreshingDisplays = false
 
+    /// Numbered cards drawn on the physical screens while the picker is open,
+    /// plus the submenu they belong to (rebuilt on every menu open).
+    private let displayOverlay = DisplayNumberOverlay()
+    private weak var displaysSubmenu: NSMenu?
+
     /// Seconds elapsed in the current screen recording, or nil when not recording.
     var screenRecordingElapsed: (() -> TimeInterval?)?
     /// Hebrew phase label while post-processing, or nil.
@@ -96,12 +101,33 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        // The display submenu is where the numbered cards go up; the root menu
+        // just refreshes its contents.
+        if menu === displaysSubmenu {
+            displayOverlay.show(for: displays)
+            return
+        }
         refreshDisplays()
         rebuildMenu()
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        // Tear the cards down on either menu closing — the root closing is the
+        // safety net that guarantees nothing is left on screen.
+        displayOverlay.hide()
+        if menu === displaysSubmenu { return }
         elapsedItem = nil
+    }
+
+    func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+        guard menu === displaysSubmenu else { return }
+        // Only display rows carry a meaningful tag; the permission and
+        // "loading" rows also have tag 0 and must not highlight screen 1.
+        guard let item, item.action == #selector(startScreenRecordingSelected(_:)) else {
+            displayOverlay.setHighlighted(nil)
+            return
+        }
+        displayOverlay.setHighlighted(item.tag)
     }
 
     private func rebuildMenu() {
@@ -220,6 +246,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                     submenu.addItem(item)
                 }
             }
+            submenu.delegate = self
+            displaysSubmenu = submenu
             root.submenu = submenu
             menu.addItem(root)
         }
@@ -337,6 +365,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func startScreenRecordingSelected(_ sender: NSMenuItem) {
         guard displays.indices.contains(sender.tag) else { return }
+        // Belt and braces: the cards must be gone before capture starts.
+        displayOverlay.hide()
         onStartScreenRecording?(displays[sender.tag])
     }
 
