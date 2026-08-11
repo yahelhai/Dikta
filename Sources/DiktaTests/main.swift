@@ -17,6 +17,7 @@ let runner = TestRunner(filter: arguments)
 print("DiktaCore tests")
 registerSmokeTests(runner)
 registerRegistryTests(runner)
+registerSessionDirectoryTests(runner)
 
 let code = await runner.run()
 cleanExit(code)
