@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         state = .recording(startedAt: Date())
-        statusItemController.setIcon(.recording)
+        statusItemController.setDictationIcon(.recording)
 
         // Watchdog: if the key-release event was lost (Cmd-Tab mid-hold etc.),
         // don't record forever.
@@ -96,12 +96,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let rms = samples.isEmpty ? 0 : sqrt(samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count))
         guard duration >= 0.3, samples.count >= 8000, rms > 0.001 else {
             state = .idle
-            statusItemController.setIcon(.idle)
+            statusItemController.setDictationIcon(.idle)
             return
         }
 
         state = .transcribing
-        statusItemController.setIcon(.transcribing)
+        statusItemController.setDictationIcon(.transcribing)
 
         let mode = Settings.shared.languageMode
 
@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("Dikta: transcription failed: \(error)")
             }
             self.state = .idle
-            self.statusItemController.setIcon(.idle)
+            self.statusItemController.setDictationIcon(.idle)
         }
     }
 
@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder.cancel()
         watchdog?.cancel()
         state = .idle
-        statusItemController.setIcon(.idle)
+        statusItemController.setDictationIcon(.idle)
     }
 
     // MARK: - Screen recording

@@ -272,3 +272,68 @@ func runLockHolderMode(_ arguments: [String]) -> Never {
     claim.release()
     exit(0)
 }
+
+/// `activeRecording` is the single predicate both refusals now share — the menu's
+/// and the CLI's — so it is worth pinning down on its own.
+func registerActiveRecordingTests(_ runner: TestRunner) {
+    runner.test("active recording: nil when nothing was ever started") { context in
+        try await withTemporaryDirectory { directory in
+            RecordingRegistry.directoryOverride = directory
+            defer { RecordingRegistry.directoryOverride = nil }
+            context.expectNil(RecordingRegistry.activeRecording(.cli))
+            context.expectNil(RecordingRegistry.activeRecording(.app))
+        }
+    }
+
+    runner.test("active recording: the state itself while live and recording") { context in
+        try await withTemporaryDirectory { directory in
+            RecordingRegistry.directoryOverride = directory
+            defer { RecordingRegistry.directoryOverride = nil }
+            guard let claim = RecordingRegistry.claim(.cli) else {
+                return context.fail("claim failed")
+            }
+            defer { claim.release() }
+
+            var state = RecordingState(owner: .cli, sessionID: "live", phase: .recording)
+            state.sessionDirectory = "/tmp/live"
+            try RecordingRegistry.write(state)
+            context.expectEqual(RecordingRegistry.activeRecording(.cli)?.sessionID, "live")
+
+            // Processing still counts as busy: a second recorder would fight it
+            // for the machine.
+            state.phase = .processing
+            try RecordingRegistry.write(state)
+            context.expectEqual(RecordingRegistry.activeRecording(.cli)?.phase, .processing)
+        }
+    }
+
+    runner.test("active recording: nil once the session finished") { context in
+        try await withTemporaryDirectory { directory in
+            RecordingRegistry.directoryOverride = directory
+            defer { RecordingRegistry.directoryOverride = nil }
+            guard let claim = RecordingRegistry.claim(.cli) else {
+                return context.fail("claim failed")
+            }
+            defer { claim.release() }
+
+            for phase in [RecordingState.Phase.done, .failed, .cancelled] {
+                var state = RecordingState(owner: .cli, sessionID: "s", phase: phase)
+                state.finishedAt = Date()
+                try RecordingRegistry.write(state)
+                context.expectNil(RecordingRegistry.activeRecording(.cli), "\(phase)")
+            }
+        }
+    }
+
+    // A recorder that died mid-run must not block the next one forever.
+    runner.test("active recording: nil when the writer is gone") { context in
+        try await withTemporaryDirectory { directory in
+            RecordingRegistry.directoryOverride = directory
+            defer { RecordingRegistry.directoryOverride = nil }
+            // Written with nobody holding the lock: a stale, non-terminal state.
+            try RecordingRegistry.write(
+                RecordingState(owner: .cli, sessionID: "orphan", phase: .recording))
+            context.expectNil(RecordingRegistry.activeRecording(.cli))
+        }
+    }
+}
