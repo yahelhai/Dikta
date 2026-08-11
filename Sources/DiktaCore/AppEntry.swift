@@ -24,6 +24,8 @@ public func runSubcommand(_ name: String, _ arguments: [String]) -> Int32? {
     case "transcribe": return runTranscribeCLI(arguments)
     case "detect": return runDetectCLI(arguments)
     case "video": return runVideoCLI(arguments)
+    case "displays": return runDisplaysCLI(arguments)
+    case "record": return runRecordCLI(arguments)
     // Hidden harness for the live screen recorder (see CLI.swift).
     case "record-test": return runRecordTestCLI(arguments)
     default: return nil
