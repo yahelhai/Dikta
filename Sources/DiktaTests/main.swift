@@ -19,6 +19,7 @@ registerSmokeTests(runner)
 registerRegistryTests(runner)
 registerSessionDirectoryTests(runner)
 registerStopGateTests(runner)
+registerRecordArgumentTests(runner)
 
 let code = await runner.run()
 cleanExit(code)

@@ -95,7 +95,10 @@ enum RecordingRegistry {
         directory.appendingPathComponent("recorder.log")
     }
 
-    private static func ensureDirectory() {
+    /// Creating the run directory is not only our own concern: `posix_spawn`
+    /// opens the child's log file inside it via a file action, and a missing
+    /// directory makes the whole spawn fail with ENOENT.
+    static func ensureDirectory() {
         try? FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
     }

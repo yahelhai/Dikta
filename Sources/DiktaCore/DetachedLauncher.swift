@@ -89,6 +89,9 @@ enum DetachedLauncher {
 func runDetachedRecord(options: RecordingSessionOptions, rawArguments: [String]) -> Int32 {
     let sessionID = UUID().uuidString
     let arguments = ["record"] + rawArguments + ["--foreground", "--session-id", sessionID]
+    // Before the spawn, not inside the child: the file action that opens the
+    // log lives in the parent's call and fails the whole spawn without it.
+    RecordingRegistry.ensureDirectory()
 
     do {
         let pid = try DetachedLauncher.spawn(

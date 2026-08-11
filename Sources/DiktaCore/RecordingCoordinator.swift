@@ -29,7 +29,10 @@ final class RecordingCoordinator {
     }
 
     private(set) var state: State = .idle {
-        didSet { onStateChange?() }
+        didSet {
+            publish()
+            onStateChange?()
+        }
     }
 
     /// Fired on the main actor whenever `state` changes.
@@ -37,6 +40,35 @@ final class RecordingCoordinator {
 
     private let recorder = LiveRecorder()
     private let transcriber = Transcriber()
+
+    /// Held for the app's whole life so `dikta record` can tell that the menu is
+    /// here at all; the published phase says whether it is actually recording.
+    private let registryClaim = RecordingRegistry.claim(.app)
+    private let sessionID = UUID().uuidString
+
+    init() { publish() }
+
+    /// Mirrors the menu's state into the run directory, so the CLI can refuse to
+    /// start a second capture instead of quietly recording the same screen twice.
+    /// One-way on purpose: `dikta stop` does not reach back into the menu.
+    private func publish() {
+        guard registryClaim != nil else { return }
+        var published = RecordingState(
+            owner: .app, sessionID: sessionID, phase: .done)
+        switch state {
+        case .idle:
+            // Terminal from the CLI's point of view — the app is not busy.
+            published.phase = .done
+        case .recording(let startedAt):
+            published.phase = .recording
+            published.startedAt = startedAt
+            published.sessionDirectory = pendingDirectory?.path
+        case .processing(let phase):
+            published.phase = .processing
+            published.label = phase
+        }
+        try? RecordingRegistry.write(published)
+    }
 
     /// Seconds since the recording started, for the menu's live timer.
     var elapsed: TimeInterval? {
