@@ -171,18 +171,33 @@ private func modelIsInstalled() -> Bool {
 
 // MARK: - displays
 
-let displaysUsage = "usage: dikta displays [--json]\n"
+let displaysUsage = "usage: dikta displays [--json] [--identify [seconds]]\n"
 
 func runDisplaysCLI(_ args: [String]) -> Int32 {
     var json = false
-    for argument in args {
-        switch argument {
+    var identify = false
+    var seconds: Double = 4
+
+    var index = 0
+    while index < args.count {
+        switch args[index] {
         case "--json": json = true
+        case "--identify":
+            identify = true
+            // The duration is optional, so only consume the next argument when
+            // it actually looks like one.
+            if index + 1 < args.count, let value = Double(args[index + 1]), value > 0 {
+                seconds = value
+                index += 1
+            }
         default:
             FileHandle.standardError.write(Data(displaysUsage.utf8))
             return 2
         }
+        index += 1
     }
+
+    if identify { return identifyDisplays(seconds: seconds) }
 
     let asJSON = json
     return blockingTask {

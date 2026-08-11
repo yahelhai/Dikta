@@ -138,9 +138,32 @@ There is no `--help`. A subcommand with missing or invalid arguments prints its 
 | [`transcribe <audio-file>`](#transcribe) | Transcribes a file; the text goes to stdout |
 | [`detect <audio-file>`](#detect) | Prints only the detected language and how long detection took |
 | [`video <video-file>`](#video) | Existing video → `index.md` + `frames/`, and with `--summarize` also `summary.md` |
+| [`displays`](#displays) | Lists the screens you can record, and can flash their numbers on-screen |
+| [`record`](#record) | Starts recording a screen and returns; stop it later |
+| [`stop`](#stop) | Ends the recording and waits for the Markdown |
+| [`status`](#status) | What is recording, or what the last session produced |
 | [`record-test <seconds>`](#record-test) | Hidden harness for the screen recorder — a test entry point, not a feature |
 
-Screen recording itself has **no CLI** — it is a menu-bar feature, driven from the display picker.
+### Recording a screen without the menu
+
+The same capture, slide detection and summary the menu performs, driven from a script — for content that can only be *played* (a streaming lecture, a call, anything DRM-protected) and therefore has to be recorded off the screen.
+
+```bash
+dikta displays
+# 1  id=23  1920x1080px
+# 2  id=1   3456x2234px  main
+# 3  id=22  1920x1080px
+
+DIR=$(dikta record --display-id 22 --summarize)   # returns once capture is live
+# …play the video…
+dikta stop                                        # prints index.md and summary.md
+```
+
+Three things worth knowing before you script it:
+
+- **`record` returns as soon as capture is actually live**, not when the recording ends. It detaches into its own session, so it survives the shell that started it — you cannot lose it by closing a terminal, and you do not need `&` or `nohup`.
+- **Stopping goes through `dikta stop`**, from any shell, at any later time. `^C` also works on a `--foreground` run.
+- **Only one recording at a time.** A second `record` exits `6` rather than quietly capturing the same screen twice, and it refuses while the menu bar app is recording. The reverse is not true: `dikta stop` does not stop a recording that was started from the menu.
 
 ### `sysinfo`
 
@@ -184,6 +207,64 @@ With `--engine api` and no key in the Keychain, `video` **warns and carries on**
 
 Paths are printed to stdout as they are written — `index.md` first, then `summary.md` if it was produced.
 
+### `displays`
+
+```bash
+dikta displays [--json] [--identify [seconds]]
+```
+
+Lists every capturable screen. **The leading number is the same 1-based number the menu rows and the on-screen cards show**, so a number read off a monitor can be handed straight to `--display`.
+
+`--identify` also draws those numbered cards on every monitor for a few seconds (4 by default), so you can see which screen is which without opening the menu. On a desk with identical monitors this is the difference between picking a screen and guessing one.
+
+Prefer `--display-id` in scripts: the ordering comes from ScreenCaptureKit and is not contractually stable between two calls, whereas the id identifies a specific monitor.
+
+### `record`
+
+```bash
+dikta record [--display <n> | --display-id <id>] [-o <dir>] [--name <folder>]
+             [--language he|en|auto] [--summarize | --no-summarize] [--engine cli|api]
+             [--for <seconds>] [--max-duration <seconds>] [--max-frames <n>]
+             [--foreground] [--no-caffeinate] [--json]
+```
+
+Prints the session directory and exits `0` once capture is live. The recording itself continues until `dikta stop`, `--for` elapses, or a limit is hit.
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--display <n>` | the main display | 1-based, matching `displays` and the on-screen cards |
+| `--display-id <id>` | — | The `id=` from `displays`; stable across reordering |
+| `-o`, `--output <dir>` | the recordings folder from the menu | The **parent** folder, as in `video`. Note `record-test -o` is the session directory itself |
+| `--name <folder>` | `הקלטה <date>` | The folder created inside `-o`. An existing one is never overwritten — it becomes `<name> (2)` |
+| `--language he\|en\|auto` | the menu's language setting | |
+| `--summarize` / `--no-summarize` | the menu's auto-summarize setting | Tri-state: with neither flag, `record` does what the menu would have done |
+| `--engine cli\|api` | the menu's engine setting | |
+| `--for <seconds>` | — | Stop automatically after this long |
+| `--max-duration <seconds>` | `14400` (4h) | Safety cap for unattended runs |
+| `--max-frames <n>` | `5000` | Also a safety cap — slides yield dozens of PNGs, but a talking head or scrolling code keeps nearly every frame |
+| `--foreground` | off | Block instead of detaching; `^C` stops and still processes |
+| `--no-caffeinate` | off | By default the display is kept awake, because a screen that sleeps mid-lecture records blank frames |
+
+### `stop`
+
+```bash
+dikta stop [--no-wait] [--timeout <seconds>] [--json]
+```
+
+Ends the recording, waits for transcription (and the summary, if enabled), then prints `index.md` and `summary.md` to stdout. Progress appears on stderr as it happens.
+
+It is safe to run more than once: against a session that already finished it re-prints the paths and exits with that session's code. If the wait exceeds `--timeout` (default 900s) it exits `7` and leaves processing running — poll `dikta status` for the result, which is also what to do when a caller's own timeout cuts the wait short.
+
+`--no-wait` returns immediately after asking the recording to stop.
+
+### `status`
+
+```bash
+dikta status [--json]
+```
+
+Reports what the CLI and the menu bar app are each doing, and exits `5` when neither is recording. A session whose recorder died is reported as **stale** rather than as still running — the frames are on disk, but nothing is going to finish them.
+
 ### `record-test`
 
 ```bash
@@ -209,18 +290,28 @@ Records the **main** display for a few seconds, optionally speaking Hebrew throu
 | `2` | Bad or missing arguments; the usage line was printed to stderr |
 | `3` | The transcription model was not found — run `make models` |
 | `4` | Partial: `index.md` was written, `summary.md` was not |
+| `5` | Nothing is recording (`stop`, `status`) |
+| `6` | Something is already recording (`record`) |
+| `7` | Stopped, but processing outlasted `--timeout` (`stop`) |
 
 ## Development
 
 ```bash
 swift build                                    # build
+make test                                      # unit tests
+make test-integration                          # drives the real CLI; needs permissions
 ./.build/debug/Dikta sysinfo                   # verify whisper + Metal
 ./.build/debug/Dikta transcribe file.wav --language he
 ./.build/debug/Dikta detect file.wav           # language detection only
 ./.build/debug/Dikta video file.mov --language he --summarize
-./.build/debug/Dikta record-test 5 -o /tmp/check
 make bundle && make install                    # package + install
 ```
+
+### Tests
+
+`make test` runs the unit suite; `make test-integration` drives the installed binary through a real record/stop cycle and needs Screen Recording permission, so it is gated behind `DIKTA_INTEGRATION=1`. Both use a temporary run directory and never touch your recordings.
+
+The suite is an ordinary executable target rather than `swift test`, because neither test framework runs under Command Line Tools alone: XCTest ships only with Xcode, and the bundled `Testing.framework` is missing `lib_TestingInterop.dylib`, so `swift test` compiles, links, and then fails at `dlopen`. `@testable import DiktaCore` still gives the runner internal access. Everything real lives in the `DiktaCore` library; `Sources/Dikta/main.swift` is a thin shell over it.
 
 Running `./.build/debug/Dikta` with no arguments launches the menu-bar app from the build, but user notifications are disabled unless it runs from a real `.app` bundle — use `make install` to test those.
 
@@ -258,11 +349,20 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `RecordingCoordinator.swift` | Session lifecycle — start, stop, post-process |
 | `VideoFileProcessor.swift` | The same pipeline for existing video files |
 | `MarkdownExporter.swift` | Slide/transcript alignment → `index.md` |
+| **The recording CLI** | |
+| `RecordingRegistry.swift` | The cross-process contract — locks, state, stop requests |
+| `StopGate.swift` | First of request/signal/deadline/frame cap/stream error wins |
+| `RecordingDaemon.swift` | One headless session, start to written Markdown |
+| `DetachedLauncher.swift` | Re-spawns the binary as a detached recorder |
+| `CLIScreen.swift` | `displays` and `record`, and the argument parser |
+| `CLIStop.swift` | `stop` and `status` |
+| `CLIIdentify.swift` | `displays --identify` — the numbered cards on demand |
 | **Summaries & tooling** | |
 | `ClaudeSummarizer.swift` | Messages API (Haiku vision) → `summary.md` |
 | `ClaudeCLISummarizer.swift` | Local `claude -p` (subscription) → `summary.md` |
 | `KeychainStore.swift` | Stores and reads the Anthropic API key |
-| `CLI.swift` | All headless subcommands |
+| `CLI.swift` | The transcribe/detect/video subcommands |
+| `AppEntry.swift` | The only surface the executable touches |
 | `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
 ## Releases

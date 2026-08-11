@@ -11,6 +11,23 @@ recording lands* both stop being guesswork.
 
 ### Added
 
+- **Screen recording from the command line** — `dikta displays`, `record`, `stop`
+  and `status`. The same capture, slide detection and Claude summary the menu
+  performs, for content that can only be *played* and therefore has to be
+  recorded off the screen. `record` returns as soon as capture is genuinely
+  live and detaches into its own session, so it survives the shell that started
+  it; `stop` works from any later shell and prints the paths it produced.
+  `displays` numbers screens exactly as the on-screen cards do, and
+  `displays --identify` flashes those cards on every monitor on demand — so a
+  script can identify a screen without opening the menu, which on a desk of
+  identical monitors is the difference between picking one and guessing.
+  New exit codes: `5` nothing recording, `6` already recording, `7` stopped but
+  processing outlasted the wait.
+- **Only one recording at a time.** The menu bar app and the CLI now see each
+  other, so a second recording is refused instead of quietly capturing the same
+  screen twice.
+- **The display is kept awake while recording** — a screen that sleeps
+  mid-lecture was the likeliest way an unattended run produced blank frames.
 - **Numbered cards on every screen.** Opening the **🖥 הקלט מסך** submenu draws a
   large numbered card in the middle of each connected monitor, matching the
   numbers in the menu rows; hovering a row highlights that monitor's card. Until
@@ -42,6 +59,17 @@ recording lands* both stop being guesswork.
 
 ### Housekeeping
 
+- **The project has tests.** Everything moved into a `DiktaCore` library so it
+  could be tested at all, leaving `main.swift` a thin shell. `make test` runs
+  the unit suite; `make test-integration` drives the real binary through a
+  record/stop cycle. The runner is an ordinary executable target rather than
+  `swift test`: XCTest ships only with Xcode, and the `Testing.framework` in the
+  Command Line Tools is missing `lib_TestingInterop.dylib`, so `swift test`
+  builds and then dies at `dlopen` — and Dikta's stated requirement is Command
+  Line Tools only.
+- Settings now read the `com.yahel.dikta` domain explicitly. `.standard` keys off
+  the bundle identifier, which a bare SwiftPM binary does not have, so
+  `.build/debug/Dikta` was silently reading different preferences from the app.
 - `CFBundleShortVersionString` had drifted — it still read `1.0` at v1.2 — and
   is now kept in step with the tag.
 - This changelog, and releases from here on going through pull requests.
