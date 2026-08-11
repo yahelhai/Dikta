@@ -4,6 +4,39 @@ Every released version and exactly what went into it. Versions follow
 [semantic versioning](https://semver.org): the major changes on a break, the
 minor on new capability, the patch on fixes alone.
 
+## [1.3.1] — 2026-08-12
+
+Three fixes to things that were supposed to work and did not, all in the menu
+bar.
+
+### Fixed
+
+- **The recording icon was never actually red.** `contentTintColor` paints
+  template images only, and the code turned the template off for exactly the
+  states it then tried to tint — so the icon rendered in its own monochrome,
+  i.e. black on a dark menu bar. Worse, a template image that *does* carry a
+  tint renders as nothing at all on current macOS, so the obvious one-line fix
+  made it invisible. The colour now comes from a palette symbol configuration,
+  which was verified against a standalone status item rather than assumed.
+  Idle is now the only state without a colour, so "Dikta is doing something" is
+  legible at a glance: orange while it is listening to you, red while it is
+  capturing the screen.
+- **Dictating during a screen recording hid the recording icon for good.** The
+  comment claimed the red circle won, but the guard only ran on the stop path:
+  dictation overwrote the icon, left it at `mic`, and the restore then declined
+  to fire. Precedence is now a pure function — dictation takes over while it is
+  happening and hands the icon back when it finishes.
+- **The menu bar could start a second recording on top of a `dikta record`.**
+  The CLI has refused in the other direction since it shipped, but the app only
+  ever *wrote* to the run registry and never read it, so both recorders could
+  capture the same screen at once, each unaware of the other. The menu now shows
+  a CLI recording in place of the display picker, and refuses with an alert if
+  one is somehow started anyway. Both refusals share one predicate so they
+  cannot drift apart.
+
+Stopping a CLI recording from the menu is deliberately still not possible —
+that would be a new capability, not a fix. `dikta stop` owns it.
+
 ## [1.3] — 2026-08-12
 
 Screen-recording quality of life: choosing *which* screen and *where the
@@ -114,6 +147,7 @@ field, or copied to the clipboard when there is nowhere to type. whisper.cpp on
 Metal, with optional routing of Hebrew to the ivrit.ai fine-tune. Nothing leaves
 the machine.
 
+[1.3.1]: https://github.com/yahelhai/Dikta/compare/v1.3...v1.3.1
 [1.3]: https://github.com/yahelhai/Dikta/compare/v1.2...v1.3
 [1.2]: https://github.com/yahelhai/Dikta/compare/v1.1...v1.2
 [1.1]: https://github.com/yahelhai/Dikta/compare/v1.0...v1.1

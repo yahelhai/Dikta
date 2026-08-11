@@ -59,40 +59,99 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         // override it.
         menu.autoenablesItems = false
         statusItem.menu = menu
-        setIcon(.idle)
+        setDictationIcon(.idle)
+        rebuildMenu()
+        startCLIPolling()
+    }
+
+    /// What dictation wants shown: `.idle`, `.recording` or `.transcribing`.
+    private var dictationState: IconState = .idle
+    /// Whether a screen recording is live — this app's, or the CLI's.
+    private var screenRecordingActive = false
+
+    /// Which icon wins. Pure, so the precedence is testable without AppKit.
+    ///
+    /// Dictation takes over while it is happening and hands the icon back when
+    /// it finishes. The previous code let it *overwrite* the screen-recording
+    /// icon, and the restore never happened, so a single dictation left the
+    /// menu bar looking idle for the rest of a lecture.
+    nonisolated static func resolveIcon(dictation: IconState, screenRecording: Bool) -> IconState {
+        if dictation != .idle { return dictation }
+        return screenRecording ? .screenRecording : .idle
+    }
+
+    /// Dictation's half of the icon.
+    func setDictationIcon(_ state: IconState) {
+        dictationState = state
+        refreshIcon()
+    }
+
+    private func refreshIcon() {
+        guard let button = statusItem.button else { return }
+        let state = Self.resolveIcon(
+            dictation: dictationState, screenRecording: screenRecordingActive)
+
+        // Idle is the only state without a colour, so "Dikta is doing
+        // something" is legible at a glance: orange while it is listening to
+        // you, red while it is capturing the screen.
+        let (symbol, description, colour): (String, String, NSColor?)
+        switch state {
+        case .idle:
+            (symbol, description, colour) = ("mic", "Dikta idle", nil)
+        case .recording:
+            (symbol, description, colour) = ("mic.fill", "Dikta recording", .systemOrange)
+        case .transcribing:
+            (symbol, description, colour) = ("waveform", "Dikta transcribing", .systemOrange)
+        case .screenRecording:
+            (symbol, description, colour) = ("record.circle", "Dikta screen recording", .systemRed)
+        }
+
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+
+        // The colour comes from a palette symbol configuration, not from
+        // `button.contentTintColor`. Two things are wrong with the tint, both
+        // checked against a standalone status item rather than assumed: a tint
+        // paints template images only, so the original code's
+        // `isTemplate = !isRed` cancelled out the very tint it was paired with
+        // and the icon rendered black; and a template image that *does* carry a
+        // tint renders as nothing at all in the menu bar on current macOS.
+        if let colour,
+           let coloured = image?.withSymbolConfiguration(.init(paletteColors: [colour])) {
+            // A coloured icon opts out of template rendering, and with it the
+            // inversion while the menu is open. That is the price of colour.
+            coloured.isTemplate = false
+            button.image = coloured
+        } else {
+            image?.isTemplate = true
+            button.image = image
+        }
+        button.contentTintColor = nil
+    }
+
+    /// This app's own recording started or ended.
+    func setScreenRecordingActive(_ active: Bool) {
+        ownRecordingActive = active
+        updateRecordingIndicators()
         rebuildMenu()
     }
 
-    private var iconState: IconState = .idle
-
-    func setIcon(_ state: IconState) {
-        iconState = state
-        guard let button = statusItem.button else { return }
-        let (symbol, description): (String, String)
-        switch state {
-        case .idle: (symbol, description) = ("mic", "Dikta idle")
-        case .recording: (symbol, description) = ("mic.fill", "Dikta recording")
-        case .transcribing: (symbol, description) = ("waveform", "Dikta transcribing")
-        case .screenRecording: (symbol, description) = ("record.circle", "Dikta screen recording")
-        }
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
-        let isRed = state == .recording || state == .screenRecording
-        image?.isTemplate = !isRed
-        button.image = image
-        button.contentTintColor = isRed ? .systemRed : nil
-    }
-
-    /// The dictation flow drives the icon too; while a screen recording is live
-    /// its red `record.circle` wins over dictation's idle state.
-    func setScreenRecordingActive(_ active: Bool) {
-        if active {
-            setIcon(.screenRecording)
-            startElapsedTimer()
+    /// One place that decides what the icon and the timer should be doing,
+    /// whichever of the two recorders is running.
+    private func updateRecordingIndicators() {
+        screenRecordingActive = ownRecordingActive || cliRecording != nil
+        refreshIcon()
+        if screenRecordingActive {
+            if elapsedTimer == nil { startElapsedTimer() }
         } else {
             stopElapsedTimer()
-            if iconState == .screenRecording { setIcon(.idle) }
         }
-        rebuildMenu()
+    }
+
+    /// Seconds into whichever recording is live, or nil.
+    private var currentElapsed: TimeInterval? {
+        if let elapsed = screenRecordingElapsed?() { return elapsed }
+        guard let cli = cliRecording, cli.phase == .recording else { return nil }
+        return Date().timeIntervalSince(cli.startedAt)
     }
 
     func setLastTranscript(_ text: String) {
@@ -213,6 +272,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             let item = NSMenuItem(title: phase, action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
+        } else if let cli = cliRecording {
+            // Someone started this from the command line. Show it instead of the
+            // picker, so a second capture of the same screen isn't one click
+            // away — `startRecording` refuses anyway, but a refusal the user
+            // never has to see is better than one they do.
+            addCLIRecordingRows(cli)
         } else if let elapsed = screenRecordingElapsed?() {
             let stop = NSMenuItem(title: "⏹ עצור הקלטה ועבד",
                                   action: #selector(stopScreenRecordingSelected), keyEquivalent: "")
@@ -342,6 +407,79 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// The rows shown while `dikta record` owns the recorder.
+    private func addCLIRecordingRows(_ state: RecordingState) {
+        let header = NSMenuItem(
+            title: state.phase == .processing
+                ? "⏳ מעבד הקלטה שהופעלה מה-CLI"
+                : "🔴 מוקלט מהשורת פקודה", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        if state.phase == .recording {
+            let elapsed = Date().timeIntervalSince(state.startedAt)
+            let timer = NSMenuItem(title: elapsedTitle(elapsed), action: nil, keyEquivalent: "")
+            timer.isEnabled = false
+            menu.addItem(timer)
+            elapsedItem = timer
+        } else if let label = state.label {
+            let phase = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            phase.isEnabled = false
+            menu.addItem(phase)
+        }
+
+        if let directory = state.sessionDirectory {
+            let item = NSMenuItem(title: abbreviated(URL(fileURLWithPath: directory)),
+                                  action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+
+        // Deliberately no stop button: stopping the CLI's recording from the
+        // menu would be a new capability, not a fix. `dikta stop` owns it.
+        let hint = NSMenuItem(title: "עצירה: dikta stop", action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        menu.addItem(hint)
+    }
+
+    // MARK: - Noticing the CLI
+
+    /// The CLI's session while it is running, refreshed by `cliPollTimer`.
+    private var cliRecording: RecordingState?
+    private var cliPollTimer: Timer?
+
+    /// The menu bar has to notice a `dikta record` that it did not start. The
+    /// menu itself rebuilds on every open, but the icon has to change while the
+    /// menu is closed, so this polls for the app's whole life.
+    private func startCLIPolling() {
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollCLIRecording() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        cliPollTimer = timer
+        pollCLIRecording()
+    }
+
+    private func pollCLIRecording() {
+        // Never while this app is the one recording: its own state is the truth
+        // then, and a probe would only cost a lock round-trip.
+        let found = ownRecordingActive ? nil : RecordingRegistry.activeRecording(.cli)
+        let wasRecording = cliRecording != nil
+        let sameSession = cliRecording?.sessionID == found?.sessionID
+        let samePhase = cliRecording?.phase == found?.phase
+        cliRecording = found
+
+        updateRecordingIndicators()
+        // Only rebuild on a real transition: the menu may be open, and rebuilding
+        // it under the user's cursor once a second would be unusable.
+        if wasRecording != (found != nil) || !sameSession || !samePhase {
+            if menu.highlightedItem == nil { rebuildMenu() }
+        }
+    }
+
+    /// Whether this app's own coordinator holds the recorder.
+    private var ownRecordingActive = false
+
     /// Keep the elapsed-time item ticking while the menu is open. `.common`
     /// includes the modal event-tracking mode menus run in.
     private func startElapsedTimer() {
@@ -349,7 +487,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let item = self.elapsedItem,
-                      let elapsed = self.screenRecordingElapsed?() else { return }
+                      let elapsed = self.currentElapsed else { return }
                 item.title = self.elapsedTitle(elapsed)
             }
         }

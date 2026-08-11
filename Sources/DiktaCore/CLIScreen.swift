@@ -143,10 +143,11 @@ func runRecordCLI(_ args: [String]) -> Int32 {
     }
 }
 
-/// Whichever owner is currently busy, phrased for a refusal.
+/// Whichever owner is currently busy, phrased for a refusal. Shares
+/// `activeRecording` with the menu's refusal so the two cannot drift.
 private func busyMessage() -> String? {
-    for (owner, state, live) in RecordingRegistry.activeOwners()
-    where live && !state.phase.isTerminal {
+    for owner in RecordingOwner.allCases {
+        guard let state = RecordingRegistry.activeRecording(owner) else { continue }
         switch owner {
         case .cli:
             let where_ = state.sessionDirectory.map { " (\($0))" } ?? ""

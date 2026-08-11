@@ -20,6 +20,8 @@ registerRegistryTests(runner)
 registerSessionDirectoryTests(runner)
 registerStopGateTests(runner)
 registerRecordArgumentTests(runner)
+registerActiveRecordingTests(runner)
+registerIconTests(runner)
 
 let code = await runner.run()
 cleanExit(code)

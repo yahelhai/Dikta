@@ -209,6 +209,16 @@ enum RecordingRegistry {
         return nil
     }
 
+    /// The session `owner` is running right now, or nil. "Running" means a live
+    /// writer in a non-terminal phase — one definition, used by the CLI's
+    /// refusal and by the menu's, so the two cannot drift apart.
+    static func activeRecording(_ owner: RecordingOwner) -> RecordingState? {
+        guard let found = read(owner), found.live, !found.state.phase.isTerminal else {
+            return nil
+        }
+        return found.state
+    }
+
     static func activeOwners() -> [(owner: RecordingOwner, state: RecordingState, live: Bool)] {
         RecordingOwner.allCases.compactMap { owner in
             guard let found = read(owner) else { return nil }

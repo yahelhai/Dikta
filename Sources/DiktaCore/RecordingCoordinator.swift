@@ -83,6 +83,15 @@ final class RecordingCoordinator {
 
     func startRecording(display: SCDisplay) {
         guard case .idle = state else { return }
+        // Before the save panel, not after: being asked to pick a folder and
+        // only then refused is worse than being refused straight away. The CLI
+        // has refused in the other direction since it shipped; this is the half
+        // that was missing, and without it both recorders capture the same
+        // screen at once, each unaware of the other.
+        if let cli = RecordingRegistry.activeRecording(.cli) {
+            warnCLIIsRecording(cli)
+            return
+        }
         guard Permissions.screenRecordingGranted else {
             Permissions.requestScreenRecording()
             NSLog("Dikta: screen recording permission missing")
@@ -131,6 +140,23 @@ final class RecordingCoordinator {
                 self.state = .idle
             }
         }
+    }
+
+    /// The mirror image of the CLI's own refusal message.
+    private func warnCLIIsRecording(_ cli: RecordingState) {
+        let alert = NSAlert()
+        alert.messageText = cli.phase == .processing
+            ? "הקלטה מהשורת פקודה עדיין מעובדת"
+            : "הקלטה כבר רצה מהשורת פקודה"
+        var body = cli.phase == .processing
+            ? "המתן שתסתיים לפני שתתחיל הקלטה חדשה."
+            : "עצור אותה עם dikta stop לפני שתתחיל הקלטה חדשה."
+        if let directory = cli.sessionDirectory { body += "\n\n\(directory)" }
+        alert.informativeText = body
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "הבנתי")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     /// Where should this recording go? Returns the chosen session directory, or
