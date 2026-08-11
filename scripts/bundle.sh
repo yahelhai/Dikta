@@ -16,7 +16,8 @@ fi
 
 echo "==> swift build -c release"
 cd "$ROOT"
-swift build -c release --arch arm64
+# --product so the test runner isn't built into the release the app ships from.
+swift build -c release --arch arm64 --product Dikta
 
 echo "==> assembling $APP"
 rm -rf "$APP"
