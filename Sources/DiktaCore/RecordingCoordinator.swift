@@ -29,7 +29,10 @@ final class RecordingCoordinator {
     }
 
     private(set) var state: State = .idle {
-        didSet { onStateChange?() }
+        didSet {
+            publish()
+            onStateChange?()
+        }
     }
 
     /// Fired on the main actor whenever `state` changes.
@@ -37,6 +40,35 @@ final class RecordingCoordinator {
 
     private let recorder = LiveRecorder()
     private let transcriber = Transcriber()
+
+    /// Held for the app's whole life so `dikta record` can tell that the menu is
+    /// here at all; the published phase says whether it is actually recording.
+    private let registryClaim = RecordingRegistry.claim(.app)
+    private let sessionID = UUID().uuidString
+
+    init() { publish() }
+
+    /// Mirrors the menu's state into the run directory, so the CLI can refuse to
+    /// start a second capture instead of quietly recording the same screen twice.
+    /// One-way on purpose: `dikta stop` does not reach back into the menu.
+    private func publish() {
+        guard registryClaim != nil else { return }
+        var published = RecordingState(
+            owner: .app, sessionID: sessionID, phase: .done)
+        switch state {
+        case .idle:
+            // Terminal from the CLI's point of view — the app is not busy.
+            published.phase = .done
+        case .recording(let startedAt):
+            published.phase = .recording
+            published.startedAt = startedAt
+            published.sessionDirectory = pendingDirectory?.path
+        case .processing(let phase):
+            published.phase = .processing
+            published.label = phase
+        }
+        try? RecordingRegistry.write(published)
+    }
 
     /// Seconds since the recording started, for the menu's live timer.
     var elapsed: TimeInterval? {
@@ -60,8 +92,12 @@ final class RecordingCoordinator {
         // Ask where this recording goes before anything is created or the state
         // moves off idle — cancelling leaves the app exactly as it was.
         guard let chosen = askForSessionDirectory() else { return }
+        startRecording(display: display, sessionDirectory: Self.uniquified(chosen))
+    }
 
-        let directory = Self.uniquified(chosen)
+    /// The same start with the destination already decided. This is the seam the
+    /// save panel blocks: `dikta record` has no UI to put a panel in.
+    func startRecording(display: SCDisplay, sessionDirectory directory: URL) {
         let framesDirectory = directory.appendingPathComponent("frames", isDirectory: true)
         do {
             try FileManager.default.createDirectory(
@@ -168,21 +204,12 @@ final class RecordingCoordinator {
         }
 
         do {
-            switch engine {
-            case .claudeCLI:
-                return try await ClaudeCLISummarizer.summarize(
-                    frames: output.frames, segments: output.segments,
-                    sessionDirectory: sessionDirectory, progress: progress)
-            case .apiKey:
-                guard let apiKey = KeychainStore.apiKey() else {
-                    NSLog("Dikta: summary skipped — API engine selected but no key configured")
-                    return output.index
-                }
-                return try await ClaudeSummarizer.summarize(
-                    frames: output.frames, segments: output.segments,
-                    sessionDirectory: sessionDirectory, apiKey: apiKey,
-                    progress: progress)
-            }
+            return try await Self.summarize(
+                output: output, sessionDirectory: sessionDirectory,
+                engine: engine, progress: progress)
+        } catch SummaryError.noAPIKey {
+            NSLog("Dikta: summary skipped — API engine selected but no key configured")
+            return output.index
         } catch {
             NSLog("Dikta: Claude summary failed: %@", "\(error)")
             // Surface the actual reason (e.g. "credit balance is too low") —
@@ -194,6 +221,42 @@ final class RecordingCoordinator {
     }
 
     private var pendingDirectory: URL?
+
+    enum SummaryError: Error {
+        case noAPIKey
+    }
+
+    /// The summary stage with no UI and no settings lookup, so the menu and
+    /// `dikta record` produce `summary.md` through exactly the same path.
+    nonisolated static func summarize(
+        output: Output, sessionDirectory: URL, engine: SummaryEngine,
+        progress: @escaping @Sendable (String) -> Void = { _ in }
+    ) async throws -> URL {
+        switch engine {
+        case .claudeCLI:
+            return try await ClaudeCLISummarizer.summarize(
+                frames: output.frames, segments: output.segments,
+                sessionDirectory: sessionDirectory, progress: progress)
+        case .apiKey:
+            guard let apiKey = KeychainStore.apiKey() else { throw SummaryError.noAPIKey }
+            return try await ClaudeSummarizer.summarize(
+                frames: output.frames, segments: output.segments,
+                sessionDirectory: sessionDirectory, apiKey: apiKey, progress: progress)
+        }
+    }
+
+    /// Where a recording goes when nothing opens a save panel: `root` (or the
+    /// stored recordings folder) plus `name` (or the dated default), then the
+    /// same collision rule the panel path uses.
+    nonisolated static func resolveSessionDirectory(
+        root: URL? = nil, name: String? = nil, date: Date = Date()
+    ) -> URL {
+        let parent = root ?? Settings.storedRecordingsFolder
+        let folder = name.map { $0.isEmpty ? defaultSessionName(date: date) : $0 }
+            ?? defaultSessionName(date: date)
+        return uniquified(
+            parent.appendingPathComponent(folder, isDirectory: true).standardizedFileURL)
+    }
 
     // MARK: - Pipeline (shared with the `record-test` CLI)
 

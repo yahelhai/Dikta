@@ -42,9 +42,19 @@ enum LanguageMode: String, CaseIterable {
 final class Settings {
     static let shared = Settings()
 
-    private let defaults = UserDefaults.standard
+    private let defaults = Settings.store
 
-    private enum Key {
+    /// Named explicitly rather than `.standard` so the CLI agrees with the app.
+    /// `.standard` keys off the bundle identifier, which a bare SwiftPM binary
+    /// like `.build/debug/Dikta` does not have — it would silently read a
+    /// different domain and, for instance, record into the wrong folder.
+    /// Computed rather than stored: `UserDefaults` is not `Sendable`, and
+    /// `UserDefaults(suiteName:)` hands back the same shared instance anyway.
+    nonisolated static var store: UserDefaults {
+        UserDefaults(suiteName: "com.yahel.dikta") ?? .standard
+    }
+
+    fileprivate enum Key {
         static let languageMode = "dikta.languageMode"
         static let shortcut = "dikta.shortcut"
         static let launchAtLogin = "dikta.launchAtLogin"
@@ -116,16 +126,11 @@ final class Settings {
     /// Where screen recordings are written. Stored as a path string; the folder
     /// itself is created on demand by `ensureRecordingsFolder()`.
     var recordingsFolder: URL {
-        get {
-            if let path = defaults.string(forKey: Key.recordingsFolder), !path.isEmpty {
-                return URL(fileURLWithPath: path, isDirectory: true)
-            }
-            return Self.defaultRecordingsFolder
-        }
+        get { Self.storedRecordingsFolder }
         set { defaults.set(newValue.path, forKey: Key.recordingsFolder) }
     }
 
-    static var defaultRecordingsFolder: URL {
+    nonisolated static var defaultRecordingsFolder: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
         return documents.appendingPathComponent("Dikta", isDirectory: true)
@@ -137,5 +142,32 @@ final class Settings {
         let folder = recordingsFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder
+    }
+}
+
+// MARK: - Reading settings off the main actor
+
+/// `dikta record` runs before any UI — and therefore any main actor — exists,
+/// but it must honour the same preferences the menu would have used. The
+/// `@MainActor` properties above delegate here, so the keys and the defaults
+/// stay defined in exactly one place.
+extension Settings {
+    nonisolated static var storedRecordingsFolder: URL {
+        if let path = store.string(forKey: Key.recordingsFolder), !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return defaultRecordingsFolder
+    }
+
+    nonisolated static var storedLanguageMode: LanguageMode {
+        LanguageMode(rawValue: store.string(forKey: Key.languageMode) ?? "") ?? .auto
+    }
+
+    nonisolated static var storedAutoSummarize: Bool {
+        store.bool(forKey: Key.autoSummarize)
+    }
+
+    nonisolated static var storedSummaryEngine: SummaryEngine {
+        SummaryEngine(rawValue: store.string(forKey: Key.summaryEngine) ?? "") ?? .claudeCLI
     }
 }

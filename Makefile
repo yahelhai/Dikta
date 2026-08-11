@@ -1,10 +1,19 @@
-.PHONY: fetch build bundle install run clean cert models
+.PHONY: fetch build bundle install run clean cert models test test-integration
 
 fetch:
 	scripts/fetch-whisper.sh
 
 build: fetch
 	swift build
+
+# XCTest needs Xcode and the Command Line Tools' Testing.framework is missing its
+# interop dylib, so the suite is a plain executable target instead of `swift test`.
+test: fetch
+	swift run DiktaTests
+
+# Drives the real binary end to end; needs Screen Recording permission.
+test-integration: fetch
+	DIKTA_INTEGRATION=1 Tests/Integration/cli-flow.sh
 
 bundle: fetch
 	scripts/bundle.sh
