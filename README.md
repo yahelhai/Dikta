@@ -27,7 +27,7 @@ Everything runs on your machine. No audio or text ever leaves it.
 - ⌨️ **Custom shortcut** — a single key or a combo (⌃⌥Space etc.), captured from the menu
 - 🧠 **Memory-aware** — models are unloaded after 5 idle minutes and reload in under a second
 - ⚡ **Fast** — Metal on Apple Silicon; ~0.25s for 4s of speech on an M5 Pro
-- 🖥️ **Screen recording → Markdown** — records a chosen display + system audio, detects slide changes live (perceptual hashing, no video file ever written), transcribes with timestamps, and writes `index.md`: every slide's screenshot with what was said over it
+- 🖥️ **Screen recording → Markdown** — records a chosen display + system audio (the picker numbers each monitor on-screen so you pick the right one), detects slide changes live (perceptual hashing, no video file ever written), transcribes with timestamps, and writes `index.md`: every slide's screenshot with what was said over it
 - 🤖 **Optional Claude summary** — Claude reads the slide images + transcript and writes a unified Hebrew `summary.md`: per-slide summaries, side topics, and action recaps for live coding/spreadsheet segments. Two engines: the local **Claude Code CLI** (default — runs on your Claude subscription, **no API credits**) or the **Messages API** with your own key (~$0.05–0.10 per lecture)
 
 ## Requirements
@@ -72,6 +72,9 @@ After granting Input Monitoring, quit and relaunch Dikta.
 ### Screen recording (lectures, meetings)
 
 1. Menu → **🖥 הקלט מסך** → pick a display; recording starts (red icon, live timer in the menu)
+
+   While the display list is open, **every connected monitor shows a large card with its own number** — the same numbers as the menu rows — so there is no guessing which "מסך 2" is which. Hovering a row highlights that monitor's card. The cards disappear the moment the menu closes, so they never end up in the recording.
+
 2. Menu → **⏹ עצור הקלטה ועבד** — Dikta transcribes and writes the session folder:
    `~/Documents/Dikta/הקלטה <date>/` with `index.md` + `frames/` (one screenshot per detected slide, each with the transcript spoken over it). **No video file is ever written** — frames and audio are processed as they stream.
 3. **Claude summary (optional):** menu → **"מנוע סיכום"** → pick an engine, then enable **"סיכום אוטומטי עם Claude"** — each recording then also gets `summary.md`, written by Claude from the slide images + transcript.
@@ -121,6 +124,7 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `OutputRouter.swift` | Injection (pasteboard + ⌘V) or copy to clipboard |
 | `ModelManager.swift` | Model registry, download and storage |
 | `LiveRecorder.swift` | ScreenCaptureKit stream — 1fps frames + system audio |
+| `DisplayNumberOverlay.swift` | Numbered cards drawn on every monitor while the display picker is open |
 | `SceneCollector.swift` | dHash slide detection + async PNG writes |
 | `VideoFileProcessor.swift` | Same pipeline for existing video files |
 | `MarkdownExporter.swift` | Slide/transcript alignment → index.md |

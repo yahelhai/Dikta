@@ -51,9 +51,19 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
 
     /// Human label for the display picker, e.g. "מסך 1 — 3456×2234 (ראשי)".
     static func label(for display: SCDisplay, index: Int) -> String {
+        "מסך \(index + 1) — \(subtitle(for: display))"
+    }
+
+    /// Everything that identifies a display except its picker number, e.g.
+    /// "3456×2234 (ראשי)". Shared by the menu row and the on-screen card.
+    ///
+    /// The resolution is wrapped in a Unicode isolate (LRI…PDI): "(ראשי)" makes
+    /// the line RTL, and without the isolate bidi reorders the two number runs
+    /// around the "×" — a 3456×2234 display would read "2234×3456".
+    static func subtitle(for display: SCDisplay) -> String {
         let (width, height) = pixelSize(of: display)
         let main = CGMainDisplayID() == display.displayID ? " (ראשי)" : ""
-        return "מסך \(index + 1) — \(width)×\(height)\(main)"
+        return "\u{2066}\(width)×\(height)\u{2069}\(main)"
     }
 
     /// Backing-store resolution, so the saved PNGs are actually readable on a
