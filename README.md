@@ -265,6 +265,10 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 | `CLI.swift` | All headless subcommands |
 | `scripts/bundle.sh` | Assembles and signs the `.app` — without Xcode |
 
+## Releases
+
+Every version and exactly what went into it: [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [MIT](LICENSE)
