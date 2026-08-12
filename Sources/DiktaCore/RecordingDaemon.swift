@@ -53,6 +53,13 @@ struct RecordingSessionOptions: Sendable, Equatable {
     var runFor: TimeInterval?
     var maxDuration: TimeInterval = 4 * 60 * 60
     var maxFrames: Int = 5000
+    /// How much audio each transcription chunk covers.
+    var chunkSeconds: TimeInterval = Settings.chunkSeconds
+    /// Keep each chunk's WAV after it has been transcribed. Off by default —
+    /// the audio is the biggest thing on disk and the transcript replaces it —
+    /// but worth having when the recording is going to be re-transcribed with a
+    /// different model.
+    var keepAudio = false
     var caffeinate = true
     var foreground = false
     var json = false
@@ -122,6 +129,27 @@ enum RecordingDaemon {
         // isn't marked Sendable, same as the menu path assumes.
         nonisolated(unsafe) let selected = display
 
+        // Everything that has to survive a crash lives here, and transcription
+        // runs off it while the lecture is still playing.
+        let workspace = SessionWorkspace(session: sessionDirectory)
+        let meta = SessionWorkspace.Meta(
+            startedAt: Date(), modelPath: "", language: nil,
+            chunkSeconds: options.chunkSeconds, title: "הקלטת מסך")
+        do {
+            try workspace.create()
+            try workspace.writeMeta(meta)
+        } catch {
+            return fail(&state, "cannot create \(workspace.root.path): \(error)", log: log)
+        }
+        let transcriber = Transcriber()
+        let pipeline = ChunkTranscriptionPipeline(
+            workspace: workspace, meta: meta, mode: language, transcriber: transcriber,
+            keepAudio: options.keepAudio
+        ) { progress in
+            log(String(format: "תומלל %.0f שניות (%d צ'אנקים)",
+                       progress.transcribedSeconds, progress.chunks))
+        }
+
         let gate = StopGate(
             owner: .cli,
             sessionID: sessionID,
@@ -136,9 +164,16 @@ enum RecordingDaemon {
         recorder.onStreamError = { error in gate.resolve(.streamError("\(error)")) }
 
         do {
-            try await recorder.start(display: selected, framesDirectory: framesDirectory)
+            try await recorder.start(
+                display: selected,
+                framesDirectory: framesDirectory,
+                audioDirectory: workspace.root,
+                chunkSeconds: options.chunkSeconds,
+                onFrame: { try? workspace.appendFrame($0) },
+                onChunk: { pipeline.submit($0) })
         } catch {
             gate.end()
+            await pipeline.finish()
             try? FileManager.default.removeItem(at: sessionDirectory)
             return fail(&state, "cannot start capture: \(error)", log: log)
         }
@@ -173,14 +208,15 @@ enum RecordingDaemon {
             return fail(&state, "capture failed: \(error)", log: log)
         }
         state.frameCount = result.frames.count
-        state.audioTempPath = result.audioURL?.path
+        state.audioTempPath = workspace.root.path
         try? RecordingRegistry.write(state)
         log("captured \(result.frames.count) frames / "
             + String(format: "%.1f", result.duration) + "s"
-            + (result.audioURL == nil ? " (no system audio)" : ""))
+            + (result.hasAudio ? "" : " (no system audio)"))
 
         // A session stopped before a single frame landed is not worth a folder.
         if result.frames.isEmpty && reason == .request && state.startedAt.timeIntervalSinceNow > -1 {
+            await pipeline.finish()
             try? FileManager.default.removeItem(at: sessionDirectory)
             state.phase = .cancelled
             state.finishedAt = Date()
@@ -194,8 +230,8 @@ enum RecordingDaemon {
         do {
             let snapshot = state
             output = try await RecordingCoordinator.process(
-                result: result, sessionDirectory: sessionDirectory,
-                mode: language, transcriber: Transcriber()
+                result: result, workspace: workspace, pipeline: pipeline,
+                sessionDirectory: sessionDirectory
             ) { phase in
                 var progress = snapshot
                 progress.label = phase

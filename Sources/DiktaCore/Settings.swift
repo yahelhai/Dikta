@@ -170,4 +170,10 @@ extension Settings {
     nonisolated static var storedSummaryEngine: SummaryEngine {
         SummaryEngine(rawValue: store.string(forKey: Key.summaryEngine) ?? "") ?? .claudeCLI
     }
+
+    /// How much audio each transcription chunk covers. Two minutes is long
+    /// enough that whisper's own 30-second windows are never the tail of the
+    /// work, and short enough that the wait after `stop` stays in seconds and a
+    /// crash costs almost nothing.
+    nonisolated static let chunkSeconds: TimeInterval = 120
 }

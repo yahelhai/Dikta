@@ -15,11 +15,13 @@ import ScreenCaptureKit
 /// deliberately *not* `@MainActor` — shared state sits behind an `NSLock`, the
 /// same pattern `AudioRecorder` uses for its realtime tap.
 final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    /// Everything a finished recording produced.
+    /// Everything a finished recording produced. The audio itself is not here:
+    /// it left as chunks during the recording (see `AudioSpooler`), each one
+    /// transcribed and deleted as it closed.
     struct Result: Sendable {
         let frames: [MarkdownExporter.Frame]
-        /// Temporary WAV with the captured system audio, or nil when silent.
-        let audioURL: URL?
+        /// False when no system audio ever arrived.
+        let hasAudio: Bool
         /// Wall-clock length of the recording.
         let duration: TimeInterval
         let startedAt: Date
@@ -95,7 +97,16 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
     }
 
     /// Start capturing `display` into `framesDirectory` (created if needed).
-    func start(display: SCDisplay, framesDirectory: URL) async throws {
+    ///
+    /// Audio is chunked into `audioDirectory`; `onChunk` fires as each chunk
+    /// closes, which is what lets transcription run alongside the capture.
+    /// `onFrame` fires once a kept frame's PNG is actually on disk.
+    func start(display: SCDisplay,
+               framesDirectory: URL,
+               audioDirectory: URL,
+               chunkSeconds: TimeInterval = 120,
+               onFrame: @escaping @Sendable (MarkdownExporter.Frame) -> Void = { _ in },
+               onChunk: @escaping @Sendable (AudioSpooler.Chunk) -> Void = { _ in }) async throws {
         guard withLock({ self.stream == nil }) else { return }
 
         try FileManager.default.createDirectory(at: framesDirectory, withIntermediateDirectories: true)
@@ -115,8 +126,10 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-        let collector = SceneCollector(directory: framesDirectory)
-        let spooler = AudioSpooler(url: Self.temporaryAudioURL())
+        let collector = SceneCollector(directory: framesDirectory, onKeep: onFrame)
+        let spooler = AudioSpooler(directory: audioDirectory,
+                                   chunkSeconds: chunkSeconds,
+                                   onChunk: onChunk)
 
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
@@ -138,7 +151,6 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
                 self.spooler = nil
                 self.startedAt = nil
             }
-            try? FileManager.default.removeItem(at: spooler.url)
             throw DiktaError.screenCaptureFailed(error.localizedDescription)
         }
     }
@@ -166,18 +178,18 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         }
 
         let frames = collector.finish()
+        // Closes the final chunk, which reaches `onChunk` like every other one.
         let audio = spooler.finish()
-        if audio == nil { try? FileManager.default.removeItem(at: spooler.url) }
         return Result(frames: frames,
-                      audioURL: audio?.url,
+                      hasAudio: audio != nil,
                       duration: Date().timeIntervalSince(startedAt),
                       startedAt: startedAt)
     }
 
-    /// Tear everything down and delete what was captured (used on failure).
+    /// Tear everything down (used on failure). The caller owns the session
+    /// directory and removes it.
     func cancel() async {
-        guard let result = try? await stop() else { return }
-        if let audioURL = result.audioURL { try? FileManager.default.removeItem(at: audioURL) }
+        _ = try? await stop()
     }
 
     // MARK: - SCStreamOutput
@@ -249,10 +261,4 @@ final class LiveRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked
         onStreamError?(error)
     }
 
-    // MARK: - Helpers
-
-    private static func temporaryAudioURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("dikta-screen-\(UUID().uuidString).wav")
-    }
 }

@@ -157,7 +157,9 @@ actor Transcriber {
 }
 
 /// One timestamped chunk of transcript, as whisper segmented it.
-struct TranscriptSegment: Sendable {
+/// Codable so the chunked pipeline can flush segments to disk as they are
+/// produced — see `SessionWorkspace`.
+struct TranscriptSegment: Sendable, Codable {
     let start: TimeInterval
     let end: TimeInterval
     let text: String

@@ -217,7 +217,27 @@ func runRecordTestCLI(_ args: [String]) -> Int32 {
             }
             note("display \(display.displayID) \(LiveRecorder.pixelSize(of: display))")
 
-            try await recorder.start(display: display, framesDirectory: framesDirectory)
+            let workspace = SessionWorkspace(session: sessionDirectory)
+            let meta = SessionWorkspace.Meta(
+                startedAt: Date(), modelPath: "", language: nil,
+                chunkSeconds: 30, title: "הקלטת מסך")
+            try workspace.create()
+            try workspace.writeMeta(meta)
+            let pipeline = ChunkTranscriptionPipeline(
+                workspace: workspace, meta: meta, mode: selectedMode,
+                transcriber: Transcriber()
+            ) { progress in
+                note("transcribed \(Int(progress.transcribedSeconds))s / \(progress.chunks) chunks")
+            }
+
+            // A short chunk so a 60-second harness run still exercises rotation.
+            try await recorder.start(
+                display: display,
+                framesDirectory: framesDirectory,
+                audioDirectory: workspace.root,
+                chunkSeconds: 30,
+                onFrame: { try? workspace.appendFrame($0) },
+                onChunk: { pipeline.submit($0) })
             note("recording \(duration)s…")
             if let narration {
                 // `say` is a separate process, so SCK captures it as system audio
@@ -230,15 +250,11 @@ func runRecordTestCLI(_ args: [String]) -> Int32 {
             try await Task.sleep(for: .seconds(duration))
 
             let result = try await recorder.stop()
-            note("frames=\(result.frames.count) audio=\(result.audioURL?.lastPathComponent ?? "none") duration=\(String(format: "%.1f", result.duration))s")
-            if let audioURL = result.audioURL {
-                let samples = (try? AudioFileLoader.loadSamples(from: audioURL)) ?? []
-                note("wav samples=\(samples.count) (\(String(format: "%.1f", Double(samples.count) / 16000))s)")
-            }
+            note("frames=\(result.frames.count) audio=\(result.hasAudio ? "yes" : "none") duration=\(String(format: "%.1f", result.duration))s")
 
             let output = try await RecordingCoordinator.process(
-                result: result, sessionDirectory: sessionDirectory,
-                mode: selectedMode, transcriber: Transcriber()
+                result: result, workspace: workspace, pipeline: pipeline,
+                sessionDirectory: sessionDirectory
             ) { phase in
                 note(phase)
             }
