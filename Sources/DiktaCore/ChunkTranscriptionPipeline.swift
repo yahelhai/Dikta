@@ -54,6 +54,11 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
             var resolved: (modelPath: String, language: String?)?
             var transcribed: TimeInterval = 0
             var count = 0
+            // The rate in force. An explicit --speed is taken as given; anything
+            // else is learned from the first chunk that comes back broken and
+            // then reused, so the search happens at most once per recording.
+            let rateIsExplicit = playbackRate != 1
+            var rate: Double? = rateIsExplicit ? playbackRate : nil
 
             for await chunk in stream {
                 do {
@@ -61,7 +66,9 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     // Undo sped-up playback before whisper sees it; the segment
                     // times that come back are then in stretched time and have
                     // to be divided by the same rate on the way out.
-                    let samples = AudioFileLoader.slowed(captured, playbackRate: playbackRate)
+                    // Explicit rate on the first chunk, the learned one after
+                    // that, and plain 1x while it is still unknown.
+                    let samples = AudioFileLoader.slowed(captured, playbackRate: rate ?? 1)
                     guard !samples.isEmpty else {
                         Self.discard(chunk, keepAudio: keepAudio)
                         continue
@@ -84,11 +91,40 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     }
                     guard let resolved else { continue }
 
-                    let segments = try await transcriber.transcribeSegments(
+                    var segments = try await transcriber.transcribeSegments(
                         samples: samples, language: resolved.language,
                         modelPath: resolved.modelPath)
+
+                    // Nobody remembers to pass --speed, and forgetting it fails
+                    // silently: a full-looking index.md with no content in it.
+                    // So when loud audio comes back as near-nothing, work the
+                    // rate out here — once, off the first chunk that shows it.
+                    if rate == nil, !rateIsExplicit,
+                       Self.looksBroken(segments: segments, seconds: chunk.duration,
+                                        rms: Self.rms(of: captured)) {
+                        let best = try await Self.detectRate(
+                            captured: captured, seconds: chunk.duration,
+                            language: resolved.language, modelPath: resolved.modelPath,
+                            baseline: segments, transcriber: transcriber)
+                        if best.rate != 1 {
+                            NSLog("Dikta: audio looks sped up — transcribing at %.2fx", best.rate)
+                            rate = best.rate
+                            segments = best.segments
+                            var updated = meta
+                            updated.modelPath = resolved.modelPath
+                            updated.language = resolved.language
+                            updated.playbackRate = best.rate
+                            try? workspace.writeMeta(updated)
+                        } else {
+                            // Nothing beat the plain reading — stop paying for
+                            // the search on every later chunk.
+                            rate = 1
+                        }
+                    }
+
+                    let effective = rate ?? playbackRate
                     try workspace.appendSegments(segments, startOffset: chunk.startOffset,
-                                                 timeScale: 1 / playbackRate)
+                                                 timeScale: 1 / effective)
 
                     // Only now is the audio expendable: the transcript for it is
                     // on disk and flushed.
@@ -120,5 +156,69 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
     private static func discard(_ chunk: AudioSpooler.Chunk, keepAudio: Bool) {
         guard !keepAudio else { return }
         try? FileManager.default.removeItem(at: chunk.url)
+    }
+
+    // MARK: - Playback rate detection
+
+    /// Rates tried when the first chunk comes back broken, in the order people
+    /// actually use them.
+    static let candidateRates: [Double] = [1.5, 2, 1.25, 3]
+
+    /// Loud audio that produced almost no text. Neither half is suspicious on
+    /// its own — a silent chunk is quiet, and a quiet chunk legitimately
+    /// transcribes to nothing — but together they are the signature of whisper
+    /// being handed speech at the wrong speed. Measured on a real 1.5x capture:
+    /// RMS 0.108 in, "Thank you." four times out.
+    static func looksBroken(segments: [TranscriptSegment], seconds: TimeInterval,
+                            rms: Float) -> Bool {
+        guard seconds > 5, rms > 0.02 else { return false }
+        return score(segments: segments, seconds: seconds) < 3
+    }
+
+    /// Distinct characters of transcript per second of audio. Ordinary speech
+    /// runs well into double figures; the degenerate output that comes back
+    /// from wrong-speed audio scores near zero because it repeats one phrase.
+    static func score(segments: [TranscriptSegment], seconds: TimeInterval) -> Double {
+        guard seconds > 0 else { return 0 }
+        var seen = Set<String>()
+        var characters = 0
+        for segment in segments {
+            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, seen.insert(text).inserted else { continue }
+            characters += text.count
+        }
+        return Double(characters) / seconds
+    }
+
+    /// Re-transcribe one chunk at each candidate rate and keep whichever reads
+    /// most like speech. Costs a few seconds, once per recording, and only when
+    /// the plain reading already came back broken — so the common case pays
+    /// nothing. Stops early on a clearly good result rather than trying them all.
+    private static func detectRate(
+        captured: [Float], seconds: TimeInterval, language: String?, modelPath: String,
+        baseline: [TranscriptSegment], transcriber: Transcriber
+    ) async throws -> (rate: Double, segments: [TranscriptSegment]) {
+        var best = (rate: 1.0, segments: baseline, score: score(segments: baseline, seconds: seconds))
+        for candidate in candidateRates {
+            let stretched = AudioFileLoader.slowed(captured, playbackRate: candidate)
+            let segments = try await transcriber.transcribeSegments(
+                samples: stretched, language: language, modelPath: modelPath)
+            // Score against the real duration either way: a rate that invents
+            // more audio must earn it in transcript, not in seconds.
+            let candidateScore = score(segments: segments, seconds: seconds)
+            NSLog("Dikta: rate probe %.2fx scored %.1f chars/s", candidate, candidateScore)
+            if candidateScore > best.score {
+                best = (candidate, segments, candidateScore)
+            }
+            if best.score > 8 { break }
+        }
+        return (best.rate, best.segments)
+    }
+
+    static func rms(of samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples { sum += sample * sample }
+        return (sum / Float(samples.count)).squareRoot()
     }
 }

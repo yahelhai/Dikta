@@ -94,6 +94,75 @@ func registerPlaybackRateTests(_ runner: TestRunner) {
         }
     }
 
+    // Detection: forgetting --speed must not be a silent failure, so the
+    // pipeline works the rate out from the shape of its own output.
+
+    /// Roughly what whisper returned for two minutes of real 1.5x narration.
+    let degenerate = [
+        TranscriptSegment(start: 0, end: 30, text: "Thank you."),
+        TranscriptSegment(start: 30, end: 60, text: "Thank you."),
+        TranscriptSegment(start: 60, end: 90, text: "Thank you."),
+        TranscriptSegment(start: 90, end: 92, text: "Thank you."),
+        TranscriptSegment(start: 120, end: 120.4, text: "to fill the gap."),
+    ]
+    /// And roughly what the same audio produced once slowed to real time.
+    let healthy = [
+        TranscriptSegment(start: 0, end: 8, text: "New Claude Obsidian 2.0 changes everything you use AI every single day."),
+        TranscriptSegment(start: 8, end: 16, text: "So why does it still know nothing about you? Every chat you have is packed with insight."),
+        TranscriptSegment(start: 16, end: 24, text: "And almost all of it disappears the second you close the tab. A free tool just fixed that."),
+    ]
+
+    runner.test("score: repetition counts once, however often it repeats") { context in
+        let repeated = Array(repeating: TranscriptSegment(start: 0, end: 1, text: "Thank you."),
+                             count: 40)
+        context.expect(ChunkTranscriptionPipeline.score(segments: repeated, seconds: 120) < 1,
+                       "forty copies of one phrase is not two minutes of speech")
+    }
+
+    runner.test("score: real speech scores well clear of the threshold") { context in
+        let value = ChunkTranscriptionPipeline.score(segments: healthy, seconds: 24)
+        context.expect(value > 8, "expected healthy narration to score high, got \(value)")
+    }
+
+    runner.test("detect: loud audio with no transcript is the signature") { context in
+        context.expect(
+            ChunkTranscriptionPipeline.looksBroken(segments: degenerate, seconds: 120, rms: 0.108),
+            "loud audio that produced nothing is exactly the wrong-speed case")
+    }
+
+    runner.test("detect: genuine silence is left alone") { context in
+        // A muted player or a gap in the lecture: same empty transcript, but the
+        // audio is quiet, so there is nothing to fix by changing the speed.
+        context.expect(
+            !ChunkTranscriptionPipeline.looksBroken(segments: degenerate, seconds: 120, rms: 0.0005),
+            "quiet audio transcribing to nothing is correct, not broken")
+        context.expect(
+            !ChunkTranscriptionPipeline.looksBroken(segments: [], seconds: 120, rms: 0.001),
+            "an empty transcript over silence must not trigger a rate search")
+    }
+
+    runner.test("detect: a good transcript is never second-guessed") { context in
+        context.expect(
+            !ChunkTranscriptionPipeline.looksBroken(segments: healthy, seconds: 24, rms: 0.1),
+            "a chunk that transcribed well should cost nothing extra")
+    }
+
+    runner.test("detect: a very short chunk is not judged") { context in
+        // The tail chunk of a recording can be a couple of seconds long; there
+        // isn't enough there to conclude anything from.
+        context.expect(
+            !ChunkTranscriptionPipeline.looksBroken(segments: [], seconds: 2, rms: 0.2),
+            "too little audio to draw a conclusion from")
+    }
+
+    runner.test("rms: distinguishes speech-level audio from silence") { context in
+        let silence = [Float](repeating: 0, count: 1000)
+        let speech = (0..<1000).map { Float(sin(Double($0) * 0.3)) * 0.3 }
+        context.expect(ChunkTranscriptionPipeline.rms(of: silence) < 0.001, "silence should read as silent")
+        context.expect(ChunkTranscriptionPipeline.rms(of: speech) > 0.02, "a signal should read as loud")
+        context.expectEqual(ChunkTranscriptionPipeline.rms(of: []), 0)
+    }
+
     runner.test("keep-audio: off still clears everything") { context in
         try await withTemporaryDirectory { directory in
             let workspace = SessionWorkspace(session: directory)

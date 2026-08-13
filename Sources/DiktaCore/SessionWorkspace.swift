@@ -30,6 +30,9 @@ final class SessionWorkspace: @unchecked Sendable {
         var chunkSeconds: TimeInterval
         /// Title for the exported document.
         var title: String
+        /// Playback rate the audio was captured at, once known. Recorded so a
+        /// recovery run transcribes the leftover chunks the same way.
+        var playbackRate: Double = 1
     }
 
     /// A chunk on disk that still needs transcribing.
