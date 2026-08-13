@@ -23,6 +23,7 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
     private let mode: LanguageMode
     private let transcriber: Transcriber
     private let keepAudio: Bool
+    private let playbackRate: Double
     private let onProgress: @Sendable (Progress) -> Void
 
     private let continuation: AsyncStream<AudioSpooler.Chunk>.Continuation
@@ -33,11 +34,13 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
          mode: LanguageMode,
          transcriber: Transcriber,
          keepAudio: Bool = false,
+         playbackRate: Double = 1,
          onProgress: @escaping @Sendable (Progress) -> Void = { _ in }) {
         self.workspace = workspace
         self.mode = mode
         self.transcriber = transcriber
         self.keepAudio = keepAudio
+        self.playbackRate = playbackRate
         self.onProgress = onProgress
 
         let (stream, continuation) = AsyncStream<AudioSpooler.Chunk>.makeStream()
@@ -46,14 +49,19 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
         // .utility: capture is the job that must not stutter. Transcribing a
         // 2-minute chunk takes a few seconds, so this sits idle most of the time,
         // but when it runs it should yield to the capture queues.
-        consumer = Task(priority: .utility) { [workspace, mode, transcriber, keepAudio, onProgress] in
+        consumer = Task(priority: .utility) {
+            [workspace, mode, transcriber, keepAudio, playbackRate, onProgress] in
             var resolved: (modelPath: String, language: String?)?
             var transcribed: TimeInterval = 0
             var count = 0
 
             for await chunk in stream {
                 do {
-                    let samples = try AudioFileLoader.loadSamples(from: chunk.url)
+                    let captured = try AudioFileLoader.loadSamples(from: chunk.url)
+                    // Undo sped-up playback before whisper sees it; the segment
+                    // times that come back are then in stretched time and have
+                    // to be divided by the same rate on the way out.
+                    let samples = AudioFileLoader.slowed(captured, playbackRate: playbackRate)
                     guard !samples.isEmpty else {
                         Self.discard(chunk, keepAudio: keepAudio)
                         continue
@@ -79,7 +87,8 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     let segments = try await transcriber.transcribeSegments(
                         samples: samples, language: resolved.language,
                         modelPath: resolved.modelPath)
-                    try workspace.appendSegments(segments, startOffset: chunk.startOffset)
+                    try workspace.appendSegments(segments, startOffset: chunk.startOffset,
+                                                 timeScale: 1 / playbackRate)
 
                     // Only now is the audio expendable: the transcript for it is
                     // on disk and flushed.

@@ -60,6 +60,11 @@ struct RecordingSessionOptions: Sendable, Equatable {
     /// but worth having when the recording is going to be re-transcribed with a
     /// different model.
     var keepAudio = false
+    /// Playback rate the source is being played at. Recording a lecture at 1.5x
+    /// saves a third of the wall clock, but whisper can collapse on the sped-up
+    /// audio, so the pipeline slows each chunk back down by this before
+    /// transcribing and rescales the timestamps afterwards.
+    var playbackRate: Double = 1
     var caffeinate = true
     var foreground = false
     var json = false
@@ -144,7 +149,7 @@ enum RecordingDaemon {
         let transcriber = Transcriber()
         let pipeline = ChunkTranscriptionPipeline(
             workspace: workspace, meta: meta, mode: language, transcriber: transcriber,
-            keepAudio: options.keepAudio
+            keepAudio: options.keepAudio, playbackRate: options.playbackRate
         ) { progress in
             log(String(format: "תומלל %.0f שניות (%d צ'אנקים)",
                        progress.transcribedSeconds, progress.chunks))
@@ -231,7 +236,7 @@ enum RecordingDaemon {
             let snapshot = state
             output = try await RecordingCoordinator.process(
                 result: result, workspace: workspace, pipeline: pipeline,
-                sessionDirectory: sessionDirectory
+                sessionDirectory: sessionDirectory, keepAudio: options.keepAudio
             ) { phase in
                 var progress = snapshot
                 progress.label = phase

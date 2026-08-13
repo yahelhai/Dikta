@@ -337,6 +337,7 @@ final class RecordingCoordinator {
                                     workspace: SessionWorkspace,
                                     pipeline: ChunkTranscriptionPipeline?,
                                     sessionDirectory: URL,
+                                    keepAudio: Bool = false,
                                     progress: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> Output {
         if let pipeline {
@@ -357,7 +358,7 @@ final class RecordingCoordinator {
             frames: result.frames,
             segments: segments,
             to: sessionDirectory)
-        workspace.remove()
+        workspace.remove(keepingAudio: keepAudio)
         return Output(index: index, frames: result.frames, segments: segments)
     }
 

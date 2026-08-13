@@ -63,7 +63,30 @@ final class SessionWorkspace: @unchecked Sendable {
     }
 
     /// Delete the workspace — called once `index.md` is safely written.
-    func remove() {
+    ///
+    /// `keepingAudio` first lifts the chunk files out to `<session>/audio/`.
+    /// Without that, `--keep-audio` was a lie: the chunks were spared during the
+    /// recording and then deleted along with the workspace at the end.
+    func remove(keepingAudio: Bool = false) {
+        if keepingAudio {
+            let chunks = pendingChunks()
+            if !chunks.isEmpty {
+                let destination = root.deletingLastPathComponent()
+                    .appendingPathComponent("audio", isDirectory: true)
+                do {
+                    try FileManager.default.createDirectory(
+                        at: destination, withIntermediateDirectories: true)
+                    for chunk in chunks {
+                        let target = destination.appendingPathComponent(chunk.url.lastPathComponent)
+                        try? FileManager.default.removeItem(at: target)
+                        try FileManager.default.moveItem(at: chunk.url, to: target)
+                    }
+                } catch {
+                    NSLog("Dikta: could not preserve audio, leaving workspace in place: %@", "\(error)")
+                    return
+                }
+            }
+        }
         try? FileManager.default.removeItem(at: root)
     }
 
@@ -87,11 +110,16 @@ final class SessionWorkspace: @unchecked Sendable {
     /// Append `segments`, shifted from chunk-local time into recording time.
     /// Flushed before returning: the point of writing these at all is to survive
     /// a process that dies without warning.
-    func appendSegments(_ segments: [TranscriptSegment], startOffset: TimeInterval) throws {
+    ///
+    /// `timeScale` compresses times that came from audio slowed back down from
+    /// sped-up playback, so what lands here is always real recording time — the
+    /// clock the frames are on.
+    func appendSegments(_ segments: [TranscriptSegment], startOffset: TimeInterval,
+                        timeScale: Double = 1) throws {
         guard !segments.isEmpty else { return }
         let shifted = segments.map {
-            TranscriptSegment(start: $0.start + startOffset,
-                              end: $0.end + startOffset,
+            TranscriptSegment(start: $0.start * timeScale + startOffset,
+                              end: $0.end * timeScale + startOffset,
                               text: $0.text)
         }
         try appendLines(shifted, to: transcriptURL)

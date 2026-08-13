@@ -15,7 +15,7 @@ let recordUsage = """
                         [--language he|en|auto] [--summarize | --no-summarize]
                         [--engine cli|api] [--for <seconds>]
                         [--max-duration <seconds>] [--max-frames <n>]
-                        [--chunk-seconds <n>] [--keep-audio]
+                        [--chunk-seconds <n>] [--keep-audio] [--speed <rate>]
                         [--foreground] [--no-caffeinate] [--json]
 
     Records a display plus system audio, then transcribes and writes
@@ -97,6 +97,12 @@ func parseRecordArguments(_ args: [String]) -> Result<RecordingSessionOptions, C
                 }
                 options.chunkSeconds = seconds
             case "--keep-audio": options.keepAudio = true
+            case "--speed":
+                let raw = try value(&index, "--speed")
+                guard let rate = Double(raw), rate >= 1, rate <= 4 else {
+                    throw CLIError(message: "--speed takes a playback rate between 1 and 4")
+                }
+                options.playbackRate = rate
             case "--foreground": options.foreground = true
             case "--no-caffeinate": options.caffeinate = false
             case "--json": options.json = true
