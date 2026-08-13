@@ -59,20 +59,33 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
             // then reused, so the search happens at most once per recording.
             let rateIsExplicit = playbackRate != 1
             var rate: Double? = rateIsExplicit ? playbackRate : nil
+            let sampleRate = AudioFileLoader.whisperFormat.sampleRate
+            /// Tail of the previous chunk, replayed into this one for context.
+            var carried: [Float] = []
+            /// Absolute time already written, so the overlap isn't written twice.
+            var acceptedUpTo: TimeInterval = 0
+            /// The cut-off last segment, kept out of the file until we know
+            /// whether another chunk is coming to supersede it.
+            var heldBack: [TranscriptSegment] = []
 
             for await chunk in stream {
                 do {
                     let captured = try AudioFileLoader.loadSamples(from: chunk.url)
+                    guard !captured.isEmpty else {
+                        Self.discard(chunk, keepAudio: keepAudio)
+                        continue
+                    }
+                    // Replay the end of the previous chunk so the sentence that
+                    // straddles the seam is transcribed once, whole.
+                    let combined = carried + captured
+                    let audioStart = max(0, chunk.startOffset - Double(carried.count) / sampleRate)
+
                     // Undo sped-up playback before whisper sees it; the segment
                     // times that come back are then in stretched time and have
                     // to be divided by the same rate on the way out.
                     // Explicit rate on the first chunk, the learned one after
                     // that, and plain 1x while it is still unknown.
-                    let samples = AudioFileLoader.slowed(captured, playbackRate: rate ?? 1)
-                    guard !samples.isEmpty else {
-                        Self.discard(chunk, keepAudio: keepAudio)
-                        continue
-                    }
+                    let samples = AudioFileLoader.slowed(combined, playbackRate: rate ?? 1)
 
                     // Routed once, off the first chunk, and reused for the rest:
                     // re-detecting per chunk would let the language flip mid-way
@@ -101,9 +114,9 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     // rate out here — once, off the first chunk that shows it.
                     if rate == nil, !rateIsExplicit,
                        Self.looksBroken(segments: segments, seconds: chunk.duration,
-                                        rms: Self.rms(of: captured)) {
+                                        rms: Self.rms(of: combined)) {
                         let best = try await Self.detectRate(
-                            captured: captured, seconds: chunk.duration,
+                            captured: combined, seconds: chunk.duration,
                             language: resolved.language, modelPath: resolved.modelPath,
                             baseline: segments, transcriber: transcriber)
                         if best.rate != 1 {
@@ -123,8 +136,18 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     }
 
                     let effective = rate ?? playbackRate
-                    try workspace.appendSegments(segments, startOffset: chunk.startOffset,
-                                                 timeScale: 1 / effective)
+                    let (write, held) = Self.merge(
+                        segments: segments, audioStart: audioStart, timeScale: 1 / effective,
+                        chunkEnd: chunk.startOffset + chunk.duration, acceptedUpTo: acceptedUpTo,
+                        overlapSeconds: Self.overlapSeconds)
+
+                    try workspace.appendSegments(write, startOffset: 0)
+                    if let last = write.last { acceptedUpTo = max(acceptedUpTo, last.end) }
+                    // Dropped on purpose if another chunk follows: its overlap
+                    // covers this audio and reads it better. Flushed after the
+                    // loop when nothing else is coming.
+                    heldBack = held
+                    carried = Array(captured.suffix(Int(Self.overlapSeconds * sampleRate)))
 
                     // Only now is the audio expendable: the transcript for it is
                     // on disk and flushed.
@@ -138,7 +161,43 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
                     NSLog("Dikta: chunk %d failed, left on disk: %@", chunk.index, "\(error)")
                 }
             }
+            // Nothing follows the last chunk, so its cut-off tail is the real
+            // end of the recording rather than something to be re-read.
+            if !heldBack.isEmpty {
+                try? workspace.appendSegments(heldBack, startOffset: 0)
+            }
         }
+    }
+
+    /// Turn one chunk's segments into what should be written now, plus what
+    /// should wait for the next chunk to re-read.
+    ///
+    /// Times arrive relative to the start of the audio that was transcribed —
+    /// which begins in the *previous* chunk, because of the overlap — so they
+    /// are rescaled and shifted to absolute recording time first. Anything the
+    /// previous chunk already wrote is then dropped, and a segment cut off by
+    /// the chunk boundary is held back so the next chunk can produce it whole.
+    static func merge(
+        segments: [TranscriptSegment], audioStart: TimeInterval, timeScale: Double,
+        chunkEnd: TimeInterval, acceptedUpTo: TimeInterval, overlapSeconds: Double
+    ) -> (write: [TranscriptSegment], held: [TranscriptSegment]) {
+        var absolute = segments.map {
+            TranscriptSegment(start: $0.start * timeScale + audioStart,
+                              end: $0.end * timeScale + audioStart,
+                              text: $0.text)
+        }
+        // Judge on the midpoint: a sentence that starts inside the overlap but
+        // mostly belongs to this chunk is this chunk's to write.
+        absolute = absolute.filter { $0.midpoint > acceptedUpTo }
+
+        // Only hold back a tail the next chunk's overlap can actually re-read;
+        // a long final segment would otherwise be dropped and never replaced.
+        if let last = absolute.last,
+           last.end >= chunkEnd - truncatedTailSeconds,
+           last.end - last.start <= overlapSeconds {
+            return (Array(absolute.dropLast()), [last])
+        }
+        return (absolute, [])
     }
 
     /// Hand over a closed chunk. Safe to call from the capture queue — it only
@@ -163,6 +222,20 @@ final class ChunkTranscriptionPipeline: @unchecked Sendable {
     /// Rates tried when the first chunk comes back broken, in the order people
     /// actually use them.
     static let candidateRates: [Double] = [1.5, 2, 1.25, 3]
+
+    /// Audio carried from the end of one chunk into the start of the next.
+    ///
+    /// Cutting on a quiet moment keeps most seams off a word, but not all of
+    /// them: a real capture split "If a claim isn't / backed by a real source"
+    /// and whisper finished the first half by inventing a sentence. Re-reading
+    /// the boundary with the audio that follows it fixes that — six seconds is
+    /// well past the longest sentence fragment a cut can strand.
+    static let overlapSeconds: Double = 6
+
+    /// A segment ending this close to the end of its chunk was cut off by the
+    /// chunk boundary rather than by the speaker, so it is held back and left
+    /// to the next chunk, which sees the whole thing.
+    static let truncatedTailSeconds: Double = 1.5
 
     /// Loud audio that produced almost no text. Neither half is suspicious on
     /// its own — a silent chunk is quiet, and a quiet chunk legitimately

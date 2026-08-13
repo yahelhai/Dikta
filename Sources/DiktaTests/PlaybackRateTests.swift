@@ -78,6 +78,74 @@ func registerPlaybackRateTests(_ runner: TestRunner) {
         }
     }
 
+    // Seams. A real 1.5x capture split "If a claim isn't / backed by a real
+    // source" across a chunk boundary, and whisper finished the first half by
+    // inventing "it's the only thing that you can do". The overlap exists to
+    // let the following chunk re-read that audio with what comes after it.
+
+    let overlap = ChunkTranscriptionPipeline.overlapSeconds
+
+    runner.test("merge: a tail cut off by the boundary is held, not written") { context in
+        let segments = [
+            TranscriptSegment(start: 0, end: 4, text: "It doesn't make up a clean sounding answer."),
+            TranscriptSegment(start: 4, end: 8, text: "If a claim isn't"),
+        ]
+        let (write, held) = ChunkTranscriptionPipeline.merge(
+            segments: segments, audioStart: 112, timeScale: 1,
+            chunkEnd: 120, acceptedUpTo: 0, overlapSeconds: overlap)
+        context.expectEqual(write.count, 1)
+        context.expectEqual(held.count, 1)
+        context.expectEqual(held.first?.text, "If a claim isn't",
+                            "the fragment the boundary cut should wait for the next chunk")
+    }
+
+    runner.test("merge: a segment that ends well before the boundary is kept") { context in
+        let segments = [TranscriptSegment(start: 0, end: 4, text: "finished in good time")]
+        let (write, held) = ChunkTranscriptionPipeline.merge(
+            segments: segments, audioStart: 0, timeScale: 1,
+            chunkEnd: 120, acceptedUpTo: 0, overlapSeconds: overlap)
+        context.expectEqual(write.count, 1)
+        context.expect(held.isEmpty, "nothing was cut off, so nothing should be held")
+    }
+
+    runner.test("merge: audio the previous chunk already covered is dropped") { context in
+        // Replayed overlap: the first segment was written by the last chunk.
+        let segments = [
+            TranscriptSegment(start: 0, end: 4, text: "already written"),
+            TranscriptSegment(start: 4, end: 9, text: "If a claim isn't backed by a real source, it stays flagged."),
+        ]
+        let (write, _) = ChunkTranscriptionPipeline.merge(
+            segments: segments, audioStart: 114, timeScale: 1,
+            chunkEnd: 240, acceptedUpTo: 118, overlapSeconds: overlap)
+        context.expectEqual(write.count, 1, "the overlap must not be transcribed into the file twice")
+        context.expectEqual(write.first?.text,
+                            "If a claim isn't backed by a real source, it stays flagged.")
+        context.expect((write.first?.start ?? 0) > 117,
+                       "the rejoined sentence should sit at the seam, not at zero")
+    }
+
+    runner.test("merge: overlap times land in absolute recording time") { context in
+        // 1.5x playback: whisper saw 9s of stretched audio starting 6s before
+        // the chunk did, so the word at 9s was really spoken at 114 + 9/1.5.
+        let segments = [TranscriptSegment(start: 9, end: 12, text: "seam")]
+        let (write, _) = ChunkTranscriptionPipeline.merge(
+            segments: segments, audioStart: 114, timeScale: 1 / 1.5,
+            chunkEnd: 240, acceptedUpTo: 0, overlapSeconds: overlap)
+        context.expect(abs((write.first?.start ?? 0) - 120) < 0.01,
+                       "expected 114 + 9/1.5 = 120, got \(write.first?.start ?? -1)")
+    }
+
+    runner.test("merge: a long final segment is written rather than lost") { context in
+        // Holding this back would be a silent deletion: the next chunk's overlap
+        // is shorter than the segment, so it could never reproduce it.
+        let segments = [TranscriptSegment(start: 0, end: 25, text: "a long uninterrupted stretch of talking")]
+        let (write, held) = ChunkTranscriptionPipeline.merge(
+            segments: segments, audioStart: 95, timeScale: 1,
+            chunkEnd: 120, acceptedUpTo: 0, overlapSeconds: overlap)
+        context.expectEqual(write.count, 1, "a segment longer than the overlap must be kept")
+        context.expect(held.isEmpty, "nothing may be held that cannot be re-read")
+    }
+
     runner.test("keep-audio: chunks survive the workspace being removed") { context in
         try await withTemporaryDirectory { directory in
             let workspace = SessionWorkspace(session: directory)
