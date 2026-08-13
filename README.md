@@ -232,10 +232,15 @@ Prefer `--display-id` in scripts: the ordering comes from ScreenCaptureKit and i
 dikta record [--display <n> | --display-id <id>] [-o <dir>] [--name <folder>]
              [--language he|en|auto] [--summarize | --no-summarize] [--engine cli|api]
              [--for <seconds>] [--max-duration <seconds>] [--max-frames <n>]
+             [--chunk-seconds <n>] [--keep-audio] [--speed <rate>]
              [--foreground] [--no-caffeinate] [--json]
 ```
 
 Prints the session directory and exits `0` once capture is live. The recording itself continues until `dikta stop`, `--for` elapses, or a limit is hit.
+
+Transcription runs **during** the recording, two minutes at a time, so stopping an 80-minute lecture takes seconds rather than minutes and a crash costs at most the chunk in flight. Work in progress lives in `<session>/.dikta-work/` and is deleted once `index.md` is written.
+
+> **Do not mute the Mac while recording.** Muting the output silences the captured audio too — the recording keeps its picture and loses every word. The volume *level* makes no difference: audio captured at volume 6 measures the same as at volume 60. Headphones you aren't wearing are the way to record in silence.
 
 | Flag | Default | Notes |
 |---|---|---|
@@ -249,6 +254,9 @@ Prints the session directory and exits `0` once capture is live. The recording i
 | `--for <seconds>` | — | Stop automatically after this long |
 | `--max-duration <seconds>` | `14400` (4h) | Safety cap for unattended runs |
 | `--max-frames <n>` | `5000` | Also a safety cap — slides yield dozens of PNGs, but a talking head or scrolling code keeps nearly every frame |
+| `--chunk-seconds <n>` | `120` | How much audio each transcription chunk covers. Shorter means a shorter wait at the end and a smaller loss on a crash, at the cost of more seams |
+| `--keep-audio` | off | Keep the captured audio in `<session>/audio/` instead of deleting each chunk once it is transcribed. Worth it when the recording may be re-transcribed with a different model |
+| `--speed <rate>` | detected | Playback rate of the source, for a lecture played at 1.5x or 2x. Normally unnecessary: sped-up audio is recognised and corrected on its own. Pass it to skip that check |
 | `--foreground` | off | Block instead of detaching; `^C` stops and still processes |
 | `--no-caffeinate` | off | By default the display is kept awake, because a screen that sleeps mid-lecture records blank frames |
 

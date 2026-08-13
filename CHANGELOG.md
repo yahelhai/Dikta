@@ -4,6 +4,64 @@ Every released version and exactly what went into it. Versions follow
 [semantic versioning](https://semver.org): the major changes on a break, the
 minor on new capability, the patch on fixes alone.
 
+## [1.4] — 2026-08-13
+
+Transcription now happens while the recording is still going, and sped-up
+playback no longer quietly produces an empty transcript.
+
+Measured on a real 80-minute lecture, the old pipeline spent **251 seconds**
+transcribing after capture stopped. The same stage now takes **under 3
+seconds**, because only the final chunk is left to do.
+
+### Added
+
+- **Transcription during the recording.** Audio is written in ~2 minute
+  chunks; each one is transcribed and deleted as it closes, and the segments
+  are appended and flushed to `<session>/.dikta-work/transcript.jsonl` as they
+  are produced. The wait after `stop` is one chunk long whatever the length of
+  the lecture, and peak memory for audio drops from ~310MB for an 80-minute
+  recording to ~7.7MB — one chunk — regardless of length. `--chunk-seconds`
+  tunes it.
+- **Sped-up playback is detected and corrected.** Recording a lecture at 1.5x
+  is the point of the CLI flow, but whisper is trained on ordinary speech and
+  collapses on the result: two minutes of clean, loud narration (RMS 0.108,
+  peak 0.91) came back as "Thank you." four times, and transcribed word for
+  word the moment it was slowed to real time. When loud audio produces almost
+  no text — a combination that does not occur naturally, since real silence is
+  quiet — the chunk is re-read at 1.5x, 2x, 1.25x and 3x and the best result
+  wins. The answer is reused for the rest of the recording, so the search runs
+  at most once, and only after something already looked wrong. `--speed <rate>`
+  states it outright and skips the check.
+- **`--keep-audio`** keeps the captured chunks in `<session>/audio/` instead of
+  deleting them once transcribed, for a recording that may be re-transcribed
+  with a different model.
+- **Crash resilience.** Frame timestamps are written to `frames.jsonl` as each
+  PNG lands, and the transcript is flushed chunk by chunk. Both used to exist
+  only in memory, so a crash in the last minute of a lecture threw away the
+  whole lecture — the audio lived in a temporary file that nothing had read
+  yet. Finishing an interrupted session automatically is not in this release;
+  what survives has to be assembled by hand for now.
+
+### Fixed
+
+- **Chunk seams no longer strand half a sentence.** Cutting on a quiet moment
+  keeps most seams off a word, but not all: a real capture split "If a claim
+  isn't / backed by a real source, it stays flagged" and whisper finished the
+  stranded half by inventing "it's the only thing that you can do". Each chunk
+  now carries the last six seconds of the previous one, so the boundary is read
+  with the audio that follows it, and the fragment is written once, whole.
+- **The frame writer had no back pressure.** Every captured frame was queued
+  for PNG encoding holding a full-size `CGImage` — ~31MB at 3456×2234 — with no
+  limit on how many could pile up. At most two are now in flight.
+
+### Known
+
+Muting the Mac's output silences the captured audio as well: the recording
+keeps its picture and loses every word. The volume *level* has no effect —
+audio captured at volume 6 measures the same as at volume 60. This is
+ScreenCaptureKit's behaviour, not something Dikta can override, so it is
+documented in the README rather than worked around.
+
 ## [1.3.1] — 2026-08-12
 
 Three fixes to things that were supposed to work and did not, all in the menu
