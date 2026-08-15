@@ -1,32 +1,68 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-/// Streams ScreenCaptureKit audio into a temporary 16kHz mono WAV.
+/// Streams ScreenCaptureKit audio into a series of 16kHz mono WAV chunks.
 ///
 /// ScreenCaptureKit hands us CMSampleBuffers (typically 48kHz stereo Float32)
 /// on its own audio queue, so this is a plain non-isolated class in the same
 /// shape as `AudioRecorder`'s `SampleAccumulator`: an `NSLock` around everything
 /// mutable, no actor hops from the callback.
 ///
-/// Writing straight through to disk as int16 keeps RAM flat (~115MB/hour on
-/// disk, nothing accumulated in memory).
+/// Chunking is what lets transcription run *during* the recording rather than
+/// in one long pass at the end: every closed chunk is handed to `onChunk` the
+/// moment it lands, and the transcriber can start on it while capture continues.
+/// Writing through to disk as int16 keeps RAM flat either way.
 final class AudioSpooler: @unchecked Sendable {
-    /// Where the WAV is being written. Caller deletes it once transcribed.
-    let url: URL
+    /// A closed chunk, ready to transcribe.
+    struct Chunk: Sendable, Equatable {
+        let url: URL
+        /// 1-based, matching the filename.
+        let index: Int
+        /// Seconds from the start of the recording to this chunk's first sample.
+        /// Counted in samples rather than wall clock, so the timestamps that end
+        /// up in the transcript can't drift.
+        let startOffset: TimeInterval
+        let duration: TimeInterval
+    }
+
+    /// Audio quieter than this counts as a gap worth cutting on (-40 dBFS).
+    /// Speech sits far above it; room tone and player silence sit below.
+    static let silenceRMS: Float = 0.01
+
+    /// Directory the chunk files are written into.
+    let directory: URL
+
+    private let chunkFrames: AVAudioFramePosition
+    private let overshootFrames: AVAudioFramePosition
+    private let onChunk: @Sendable (Chunk) -> Void
 
     private let lock = NSLock()
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var sourceFormat: AVAudioFormat?
     private var framesWritten: AVAudioFramePosition = 0
+    private var framesInChunk: AVAudioFramePosition = 0
+    private var chunkIndex = 0
+    private var currentURL: URL?
     private var failureLogged = false
     private var closed = false
 
-    init(url: URL) {
-        self.url = url
+    /// - Parameters:
+    ///   - chunkSeconds: how much audio to gather before looking for a cut.
+    ///   - maximumOvershoot: how long to keep waiting for a quiet moment past
+    ///     that target before cutting mid-word anyway.
+    init(directory: URL,
+         chunkSeconds: TimeInterval = 120,
+         maximumOvershoot: TimeInterval = 15,
+         onChunk: @escaping @Sendable (Chunk) -> Void) {
+        let rate = AudioFileLoader.whisperFormat.sampleRate
+        self.directory = directory
+        self.chunkFrames = AVAudioFramePosition(chunkSeconds * rate)
+        self.overshootFrames = AVAudioFramePosition(maximumOvershoot * rate)
+        self.onChunk = onChunk
     }
 
-    /// Frames written so far, in seconds of 16kHz audio.
+    /// Seconds of audio written so far, across every chunk.
     var duration: TimeInterval {
         lock.lock()
         defer { lock.unlock() }
@@ -38,26 +74,15 @@ final class AudioSpooler: @unchecked Sendable {
     func append(_ sampleBuffer: CMSampleBuffer) {
         guard let input = Self.pcmBuffer(from: sampleBuffer), input.frameLength > 0 else { return }
         lock.lock()
-        defer { lock.unlock() }
-        guard !closed else { return }
+        guard !closed else {
+            lock.unlock()
+            return
+        }
 
+        var finished: Chunk?
         do {
             let target = AudioFileLoader.whisperFormat
-            if file == nil {
-                // 16-bit PCM on disk, Float32 in the processing format so the
-                // converter output can be handed over unchanged.
-                let settings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: target.sampleRate,
-                    AVNumberOfChannelsKey: 1,
-                    AVLinearPCMBitDepthKey: 16,
-                    AVLinearPCMIsFloatKey: false,
-                    AVLinearPCMIsBigEndianKey: false,
-                    AVLinearPCMIsNonInterleaved: false,
-                ]
-                file = try AVAudioFile(forWriting: url, settings: settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-            }
+            if file == nil { try openChunk(format: target) }
             if converter == nil || sourceFormat != input.format {
                 guard let made = AVAudioConverter(from: input.format, to: target) else {
                     throw DiktaError.audioLoadFailed("cannot convert \(input.format) to 16kHz mono")
@@ -65,11 +90,17 @@ final class AudioSpooler: @unchecked Sendable {
                 converter = made
                 sourceFormat = input.format
             }
-            guard let file, let converter else { return }
+            guard let file, let converter else {
+                lock.unlock()
+                return
+            }
 
             let ratio = target.sampleRate / input.format.sampleRate
             let capacity = AVAudioFrameCount(Double(input.frameLength) * ratio) + 256
-            guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+            guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else {
+                lock.unlock()
+                return
+            }
 
             nonisolated(unsafe) var fed = false
             var conversionError: NSError?
@@ -83,34 +114,101 @@ final class AudioSpooler: @unchecked Sendable {
                 return input
             }
             if let conversionError { throw conversionError }
-            guard output.frameLength > 0 else { return }
+            guard output.frameLength > 0 else {
+                lock.unlock()
+                return
+            }
 
             try file.write(from: output)
             framesWritten += AVAudioFramePosition(output.frameLength)
+            framesInChunk += AVAudioFramePosition(output.frameLength)
+
+            if shouldRotate(after: output) { finished = closeChunk() }
         } catch {
             if !failureLogged {
                 failureLogged = true
                 NSLog("Dikta: audio spool failed: %@", "\(error)")
             }
         }
+        lock.unlock()
+        // Outside the lock: the handler transcribes, and the capture queue must
+        // not be held up behind it.
+        if let finished { onChunk(finished) }
     }
 
-    /// Close the file and report what was written. Returns nil when no audio
+    /// Close the final chunk and report the totals. Returns nil when no audio
     /// ever arrived (no system sound during the recording).
     @discardableResult
-    func finish() -> (url: URL, duration: TimeInterval)? {
+    func finish() -> (chunks: Int, duration: TimeInterval)? {
         lock.lock()
-        defer { lock.unlock() }
         closed = true
-        guard file != nil, framesWritten > 0 else {
-            file = nil
-            converter = nil
+        let finished = closeChunk()
+        converter = nil
+        let total = Double(framesWritten) / AudioFileLoader.whisperFormat.sampleRate
+        let count = chunkIndex
+        lock.unlock()
+
+        if let finished { onChunk(finished) }
+        guard count > 0, total > 0 else { return nil }
+        return (count, total)
+    }
+
+    // MARK: - Chunk lifecycle (call with the lock held)
+
+    private func openChunk(format: AVAudioFormat) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        chunkIndex += 1
+        let url = directory.appendingPathComponent(String(format: "chunk-%04d.wav", chunkIndex))
+        // 16-bit PCM on disk, Float32 in the processing format so the converter
+        // output can be handed over unchanged.
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: format.sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        file = try AVAudioFile(forWriting: url, settings: settings,
+                               commonFormat: .pcmFormatFloat32, interleaved: false)
+        currentURL = url
+        framesInChunk = 0
+    }
+
+    /// Past the target length, cut on the first quiet buffer; past the overshoot,
+    /// cut regardless. Waiting for quiet costs a few seconds of latency and buys
+    /// a seam that doesn't fall inside a word.
+    private func shouldRotate(after buffer: AVAudioPCMBuffer) -> Bool {
+        guard framesInChunk >= chunkFrames else { return false }
+        if framesInChunk >= chunkFrames + overshootFrames { return true }
+        return Self.rms(of: buffer) < Self.silenceRMS
+    }
+
+    /// Close the open chunk and describe it. nil when nothing was written to it.
+    private func closeChunk() -> Chunk? {
+        // AVAudioFile finalises the WAV header on deallocation, so the file must
+        // go before anyone is told the chunk is readable.
+        file = nil
+        guard let url = currentURL, framesInChunk > 0 else {
+            currentURL = nil
             return nil
         }
-        // AVAudioFile finalises the WAV header on deallocation.
-        file = nil
-        converter = nil
-        return (url, Double(framesWritten) / AudioFileLoader.whisperFormat.sampleRate)
+        currentURL = nil
+        let rate = AudioFileLoader.whisperFormat.sampleRate
+        let chunk = Chunk(url: url,
+                          index: chunkIndex,
+                          startOffset: Double(framesWritten - framesInChunk) / rate,
+                          duration: Double(framesInChunk) / rate)
+        framesInChunk = 0
+        return chunk
+    }
+
+    static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channel = buffer.floatChannelData, buffer.frameLength > 0 else { return 0 }
+        let samples = UnsafeBufferPointer(start: channel[0], count: Int(buffer.frameLength))
+        let sum = samples.reduce(Float(0)) { $0 + $1 * $1 }
+        return (sum / Float(buffer.frameLength)).squareRoot()
     }
 
     // MARK: - CMSampleBuffer bridging

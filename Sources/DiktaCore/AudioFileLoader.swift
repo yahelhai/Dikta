@@ -51,6 +51,30 @@ enum AudioFileLoader {
         return samples(from: outputBuffer)
     }
 
+    /// Stretch samples captured from sped-up playback back towards real time.
+    ///
+    /// Recording a lecture at 1.5x saves a third of the wall clock, but whisper
+    /// is trained on ordinary speech and a 1.5x stream can collapse into
+    /// nonsense — measured on a real capture, "Thank you." repeated over two
+    /// minutes of perfectly good audio, which transcribed correctly the moment
+    /// it was slowed back down. Linear interpolation is enough: it drops pitch
+    /// the way a tape slowdown does, and whisper handles that fine.
+    static func slowed(_ samples: [Float], playbackRate: Double) -> [Float] {
+        guard playbackRate > 0, playbackRate != 1, samples.count > 1 else { return samples }
+        let count = Int(Double(samples.count) * playbackRate)
+        guard count > 1 else { return samples }
+        var out = [Float](repeating: 0, count: count)
+        let step = Double(samples.count - 1) / Double(count - 1)
+        for i in 0..<count {
+            let position = Double(i) * step
+            let low = Int(position)
+            let high = min(low + 1, samples.count - 1)
+            let fraction = Float(position - Double(low))
+            out[i] = samples[low] * (1 - fraction) + samples[high] * fraction
+        }
+        return out
+    }
+
     static func samples(from buffer: AVAudioPCMBuffer) -> [Float] {
         guard let channelData = buffer.floatChannelData else { return [] }
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))

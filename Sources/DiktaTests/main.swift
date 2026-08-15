@@ -22,6 +22,7 @@ registerStopGateTests(runner)
 registerRecordArgumentTests(runner)
 registerActiveRecordingTests(runner)
 registerIconTests(runner)
+registerPlaybackRateTests(runner)
 
 let code = await runner.run()
 cleanExit(code)

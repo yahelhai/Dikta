@@ -16,16 +16,27 @@ final class SceneCollector: @unchecked Sendable {
     /// (global dedup — catches going back to an earlier slide).
     static let duplicateThreshold = 6
 
+    /// How many full-size images may be waiting to be encoded at once. Each one
+    /// is a whole screen of pixels (~31MB at 3456×2234), so an unbounded backlog
+    /// is unbounded memory; blocking the capture queue instead costs at most a
+    /// dropped frame, and frames are deduplicated anyway.
+    static let maximumPendingWrites = 2
+
     private let directory: URL
     private let writeQueue = DispatchQueue(label: "com.yahel.dikta.frame-writer", qos: .utility)
     private let writeGroup = DispatchGroup()
+    private let writeSlots = DispatchSemaphore(value: SceneCollector.maximumPendingWrites)
+    private let onKeep: @Sendable (MarkdownExporter.Frame) -> Void
 
     private let lock = NSLock()
     private var keptHashes: [UInt64] = []
     private var frames: [MarkdownExporter.Frame] = []
 
-    init(directory: URL) {
+    /// `onKeep` fires once the PNG is on disk, so a caller recording frame
+    /// timestamps never records one whose image is missing.
+    init(directory: URL, onKeep: @escaping @Sendable (MarkdownExporter.Frame) -> Void = { _ in }) {
         self.directory = directory
+        self.onKeep = onKeep
     }
 
     /// Offer a captured frame. Returns true when it was kept (and queued for
@@ -47,14 +58,18 @@ final class SceneCollector: @unchecked Sendable {
             }
         }
         let filename = String(format: "%04d.png", frames.count + 1)
+        let frame = MarkdownExporter.Frame(file: "frames/\(filename)", timestamp: timestamp)
         keptHashes.append(hash)
-        frames.append(MarkdownExporter.Frame(file: "frames/\(filename)", timestamp: timestamp))
+        frames.append(frame)
         lock.unlock()
 
         let url = directory.appendingPathComponent(filename)
-        writeQueue.async(group: writeGroup) {
+        writeSlots.wait()
+        writeQueue.async(group: writeGroup) { [onKeep, writeSlots] in
+            defer { writeSlots.signal() }
             do {
                 try Self.writePNG(image, to: url)
+                onKeep(frame)
             } catch {
                 // finish() drops frames whose PNG never landed, so the Markdown
                 // can't end up pointing at a missing image.

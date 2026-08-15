@@ -115,8 +115,26 @@ final class RecordingCoordinator {
             NSLog("Dikta: failed to create session directory: %@", "\(error)")
             return
         }
-        state = .recording(startedAt: Date())
+        let startedAt = Date()
+        let workspace = SessionWorkspace(session: directory)
+        let meta = SessionWorkspace.Meta(
+            startedAt: startedAt, modelPath: "", language: nil,
+            chunkSeconds: Settings.chunkSeconds, title: "הקלטת מסך")
+        do {
+            try workspace.create()
+            try workspace.writeMeta(meta)
+        } catch {
+            NSLog("Dikta: failed to create workspace: %@", "\(error)")
+            return
+        }
+        let pipeline = ChunkTranscriptionPipeline(
+            workspace: workspace, meta: meta, mode: Settings.shared.languageMode,
+            transcriber: transcriber)
+
+        state = .recording(startedAt: startedAt)
         pendingDirectory = directory
+        pendingWorkspace = workspace
+        pendingPipeline = pipeline
 
         recorder.onStreamError = { [weak self] error in
             Task { @MainActor in
@@ -132,10 +150,19 @@ final class RecordingCoordinator {
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.recorder.start(display: selected, framesDirectory: framesDirectory)
+                try await self.recorder.start(
+                    display: selected,
+                    framesDirectory: framesDirectory,
+                    audioDirectory: workspace.root,
+                    chunkSeconds: Settings.chunkSeconds,
+                    onFrame: { try? workspace.appendFrame($0) },
+                    onChunk: { pipeline.submit($0) })
             } catch {
                 NSLog("Dikta: failed to start screen recording: %@", "\(error)")
                 self.pendingDirectory = nil
+                self.pendingWorkspace = nil
+                self.pendingPipeline = nil
+                await pipeline.finish()
                 try? FileManager.default.removeItem(at: directory)
                 self.state = .idle
             }
@@ -184,20 +211,21 @@ final class RecordingCoordinator {
 
     /// Stop capturing and run the full pipeline. Safe to call twice.
     func stopAndProcess() {
-        guard case .recording = state, let directory = pendingDirectory else { return }
+        guard case .recording = state, let directory = pendingDirectory,
+              let workspace = pendingWorkspace else { return }
+        let pipeline = pendingPipeline
         pendingDirectory = nil
+        pendingWorkspace = nil
+        pendingPipeline = nil
         state = .processing(phase: "עוצר הקלטה…")
-
-        let mode = Settings.shared.languageMode
-        let transcriber = self.transcriber
 
         Task { [weak self] in
             guard let self else { return }
             do {
                 let result = try await self.recorder.stop()
                 let output = try await Self.process(
-                    result: result, sessionDirectory: directory, mode: mode,
-                    transcriber: transcriber
+                    result: result, workspace: workspace, pipeline: pipeline,
+                    sessionDirectory: directory
                 ) { phase in
                     Task { @MainActor [weak self] in
                         self?.state = .processing(phase: phase)
@@ -247,6 +275,10 @@ final class RecordingCoordinator {
     }
 
     private var pendingDirectory: URL?
+    /// Live for the length of a recording: where partial work is flushed, and
+    /// the transcriber consuming chunks as they close.
+    private var pendingWorkspace: SessionWorkspace?
+    private var pendingPipeline: ChunkTranscriptionPipeline?
 
     enum SummaryError: Error {
         case noAPIKey
@@ -294,36 +326,29 @@ final class RecordingCoordinator {
         let segments: [TranscriptSegment]
     }
 
-    /// Transcribe the recorded audio, align it to the kept frames and write
-    /// `index.md`. Deletes the temporary WAV, so the session directory is left
-    /// holding nothing but `index.md` and `frames/`.
+    /// Drain whatever transcription is still in flight, then write `index.md`.
+    ///
+    /// Nearly all of the transcribing already happened during the recording, so
+    /// what is left here is the final chunk — seconds, not the minutes the old
+    /// single-pass version took. The workspace is removed only once `index.md`
+    /// is safely on disk.
     @discardableResult
     nonisolated static func process(result: LiveRecorder.Result,
+                                    workspace: SessionWorkspace,
+                                    pipeline: ChunkTranscriptionPipeline?,
                                     sessionDirectory: URL,
-                                    mode: LanguageMode,
-                                    transcriber: Transcriber,
+                                    keepAudio: Bool = false,
                                     progress: @escaping @Sendable (String) -> Void = { _ in }
     ) async throws -> Output {
-        defer {
-            if let audioURL = result.audioURL {
-                try? FileManager.default.removeItem(at: audioURL)
-            }
+        if let pipeline {
+            progress("מסיים תמלול…")
+            await pipeline.finish()
         }
-
-        var segments: [TranscriptSegment] = []
-        if let audioURL = result.audioURL {
-            progress("טוען אודיו…")
-            let samples = try AudioFileLoader.loadSamples(from: audioURL)
-            if !samples.isEmpty {
-                progress("מתמלל…")
-                let (modelPath, language) = try await LanguageRouter.route(
-                    samples: samples, mode: mode, transcriber: transcriber)
-                segments = try await transcriber.transcribeSegments(
-                    samples: samples, language: language, modelPath: modelPath)
-            }
-        } else {
+        if !result.hasAudio {
             NSLog("Dikta: no system audio captured — writing frames only")
         }
+
+        let segments = workspace.readSegments()
 
         progress("כותב Markdown…")
         let index = try MarkdownExporter.write(
@@ -333,6 +358,7 @@ final class RecordingCoordinator {
             frames: result.frames,
             segments: segments,
             to: sessionDirectory)
+        workspace.remove(keepingAudio: keepAudio)
         return Output(index: index, frames: result.frames, segments: segments)
     }
 

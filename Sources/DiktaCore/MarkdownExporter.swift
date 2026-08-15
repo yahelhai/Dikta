@@ -5,7 +5,9 @@ import Foundation
 enum MarkdownExporter {
     /// A kept frame: its path relative to the output directory, and the time in
     /// the recording at which it appeared.
-    struct Frame: Sendable {
+    /// Codable so the timestamps survive a crash: the PNGs are on disk but
+    /// worthless without knowing when each appeared (see `SessionWorkspace`).
+    struct Frame: Sendable, Codable {
         let file: String
         let timestamp: TimeInterval
 
