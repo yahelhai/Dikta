@@ -42,6 +42,17 @@ seconds**, because only the final chunk is left to do.
   yet. Finishing an interrupted session automatically is not in this release;
   what survives has to be assembled by hand for now.
 
+### Changed
+
+- **The summary covers the whole recording, not its first 60 slides.** Both
+  engines cut the slide list at a fixed 60 and asked the model to note that the
+  rest was missing, so a long lecture was summarized from its opening alone.
+  The CLI engine now sends every slide — it reads the PNGs off disk with its own
+  Read tool, so a count was never its constraint, only an inherited one — and
+  the API engine packs slides until the encoded body approaches the 32MB request
+  limit, which is the limit that actually exists. The CLI timeout rises from 15
+  to 45 minutes to cover the extra reading.
+
 ### Fixed
 
 - **Chunk seams no longer strand half a sentence.** Cutting on a quiet moment

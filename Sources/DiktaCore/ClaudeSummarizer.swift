@@ -18,8 +18,11 @@ enum ClaudeSummarizer {
     /// Anthropic downscales anything larger, so do it here and save the tokens.
     static let maxImageEdge = 1568
     static let jpegQuality = 0.7
-    /// Above this we'd risk the 32MB request cap; batching is future work.
-    static let maxSlides = 60
+    /// The API rejects a body over 32MB, so slides are packed until the encoded
+    /// payload approaches that, with room to spare for the JSON around them.
+    /// A fixed slide count can't do this job: the same number is a needless
+    /// truncation for light frames and an overflow for heavy ones.
+    static let maxRequestBytes = 28 * 1024 * 1024
     /// A lecture can take minutes to summarize — don't time out on it.
     static let requestTimeout: TimeInterval = 600
 
@@ -67,16 +70,11 @@ enum ClaudeSummarizer {
                             segments: [TranscriptSegment],
                             sessionDirectory: URL) throws -> Data {
         let spokenPerFrame = MarkdownExporter.align(frames: frames, segments: segments)
-        let truncated = frames.count > maxSlides
-        if truncated {
-            NSLog("Dikta: %d slides — summarizing the first %d only",
-                  frames.count, maxSlides)
-        }
-        let usedCount = min(frames.count, maxSlides)
 
         var content: [[String: Any]] = []
-        for index in 0..<usedCount {
-            let frame = frames[index]
+        var usedCount = 0
+        var payloadBytes = 0
+        for (index, frame) in frames.enumerated() {
             let spoken = spokenPerFrame[index]
                 .map(\.text)
                 .joined(separator: " ")
@@ -85,16 +83,29 @@ enum ClaudeSummarizer {
                 שקופית \(index + 1) — קובץ \(frame.file) — [\(MarkdownExporter.timecode(frame.timestamp))]
                 תמלול: \(transcript)
                 """
+            let image = try jpegBase64(
+                at: sessionDirectory.appendingPathComponent(frame.file))
+            // The first slide goes in at whatever it weighs — a request the API
+            // may refuse still beats one with no picture in it at all.
+            let slideBytes = header.utf8.count + image.utf8.count
+            if usedCount > 0, payloadBytes + slideBytes > maxRequestBytes { break }
+            payloadBytes += slideBytes
+            usedCount += 1
             content.append(["type": "text", "text": header])
             content.append([
                 "type": "image",
                 "source": [
                     "type": "base64",
                     "media_type": "image/jpeg",
-                    "data": try jpegBase64(
-                        at: sessionDirectory.appendingPathComponent(frame.file)),
+                    "data": image,
                 ],
             ])
+        }
+
+        let truncated = usedCount < frames.count
+        if truncated {
+            NSLog("Dikta: %d slides — %d of them fit the request budget",
+                  frames.count, usedCount)
         }
 
         var instructions = instructionText

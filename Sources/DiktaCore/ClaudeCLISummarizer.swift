@@ -8,9 +8,9 @@ import Foundation
 /// JPEG downscaling needed); we only hand it the per-slide transcript and the
 /// same Hebrew instructions the API engine uses.
 enum ClaudeCLISummarizer {
-    /// Reading dozens of images + writing a long document can take a while.
-    static let timeout: TimeInterval = 15 * 60
-    static let maxSlides = ClaudeSummarizer.maxSlides
+    /// Reading hundreds of images + writing a long document can take a while —
+    /// there is no slide cap, so this has to cover a full lecture's worth.
+    static let timeout: TimeInterval = 45 * 60
 
     typealias ProgressHandler = @Sendable (String) -> Void
 
@@ -84,11 +84,9 @@ enum ClaudeCLISummarizer {
     private static func buildPrompt(frames: [MarkdownExporter.Frame],
                                     segments: [TranscriptSegment]) -> String {
         let spokenPerFrame = MarkdownExporter.align(frames: frames, segments: segments)
-        let usedCount = min(frames.count, maxSlides)
 
         var slides: [String] = []
-        for index in 0..<usedCount {
-            let frame = frames[index]
+        for (index, frame) in frames.enumerated() {
             let spoken = spokenPerFrame[index].map(\.text).joined(separator: " ")
             slides.append("""
                 שקופית \(index + 1) — קובץ \(frame.file) — [\(MarkdownExporter.timecode(frame.timestamp))]
@@ -107,15 +105,6 @@ enum ClaudeCLISummarizer {
 
         """
         prompt += ClaudeSummarizer.instructionText
-        if frames.count > maxSlides {
-            NSLog("Dikta: %d slides — CLI summary covers the first %d only",
-                  frames.count, maxSlides)
-            prompt += """
-
-                שים לב: ההקלטה כללה \(frames.count) שקופיות ונשלחו רק \(usedCount) \
-                הראשונות. ציין זאת בסוף המסמך.
-                """
-        }
         return prompt
     }
 
