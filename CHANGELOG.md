@@ -216,6 +216,7 @@ field, or copied to the clipboard when there is nowhere to type. whisper.cpp on
 Metal, with optional routing of Hebrew to the ivrit.ai fine-tune. Nothing leaves
 the machine.
 
+[1.4]: https://github.com/yahelhai/Dikta/compare/v1.3.1...v1.4
 [1.3.1]: https://github.com/yahelhai/Dikta/compare/v1.3...v1.3.1
 [1.3]: https://github.com/yahelhai/Dikta/compare/v1.2...v1.3
 [1.2]: https://github.com/yahelhai/Dikta/compare/v1.1...v1.2

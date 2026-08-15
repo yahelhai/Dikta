@@ -384,6 +384,18 @@ say -v Carmit "שלום עולם" -o test.wav --data-format=LEI16@16000
 
 Every version and exactly what went into it: [CHANGELOG.md](CHANGELOG.md).
 
+A release is cut from `main` once the version's PR is merged:
+
+```
+make release VERSION=1.4 CHECK=1   # verify only
+make release VERSION=1.4           # tag, push the tag, publish the release
+```
+
+It refuses unless `main` is clean and level with the remote, `Info.plist`
+carries that exact version, and the CHANGELOG has both the section and its
+link line — the four steps used to be manual, and v1.4 shipped a version
+string two days before anything tagged it.
+
 ## License
 
 [MIT](LICENSE)

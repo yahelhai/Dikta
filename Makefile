@@ -1,4 +1,4 @@
-.PHONY: fetch build bundle install run clean cert models test test-integration
+.PHONY: fetch build bundle install run clean cert models test test-integration release
 
 fetch:
 	scripts/fetch-whisper.sh
@@ -27,6 +27,12 @@ run: build
 
 cert:
 	scripts/make-cert.sh
+
+# Tag and publish a release: make release VERSION=1.4 (add CHECK=1 to only
+# verify). Refuses unless main, Info.plist and the CHANGELOG all agree.
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=1.4 [CHECK=1]"; exit 2; }
+	scripts/release.sh $(VERSION) $(if $(CHECK),--check,)
 
 models:
 	mkdir -p "$$HOME/Library/Application Support/Dikta/models"
